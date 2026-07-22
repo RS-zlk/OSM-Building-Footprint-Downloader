@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Accessible desktop interface for the OSM building footprint downloader."""
+"""Modern desktop interface for the OSM building footprint downloader."""
 
 from __future__ import annotations
 
@@ -13,11 +13,20 @@ from pathlib import Path
 from typing import Sequence
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
+
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DOWNLOADER = PROJECT_DIR / "download_buildings.py"
 PRESETS = ("最新数据", "自定义日期时间", "1 天前", "7 天前", "30 天前", "90 天前", "1 年前")
+OUTPUT_FORMATS = ("GeoJSON (.geojson)", "Shapefile (.shp)")
+BLACK = "#111111"
+WHITE = "#FFFFFF"
+PANEL = "#F7F7F7"
+BORDER = "#E2E2E2"
+MUTED = "#666666"
 
 
 def snapshot_to_iso(day: date, hour: str, minute: str, second: str) -> str:
@@ -30,19 +39,14 @@ def snapshot_to_iso(day: date, hour: str, minute: str, second: str) -> str:
 
 
 def available_days(year: str, month: str) -> list[str]:
-    """List valid zero-padded days for a selected year and month."""
     return [f"{value:02d}" for value in range(1, monthrange(int(year), int(month))[1] + 1)]
 
 
-def build_command(
-    source_mode: str,
-    bbox: Sequence[str] | str,
-    shp_path: str,
-    output_path: str,
-    snapshot_date: str,
-    tile_size: str,
-    retries: str,
-) -> list[str]:
+def output_extension(output_format: str) -> str:
+    return ".shp" if output_format == "Shapefile (.shp)" else ".geojson"
+
+
+def build_command(source_mode: str, bbox: Sequence[str] | str, shp_path: str, output_path: str, snapshot_date: str, tile_size: str, retries: str) -> list[str]:
     """Build a safe subprocess command from validated GUI field values."""
     command = [sys.executable, str(DOWNLOADER)]
     if source_mode == "shp":
@@ -55,7 +59,7 @@ def build_command(
             raise ValueError("请完整填写南、西、北、东四个范围值。")
         command.extend(["--bbox", *values])
     if not output_path.strip():
-            raise ValueError("请选择输出 GeoJSON 或 SHP 文件。")
+        raise ValueError("请选择输出文件。")
     command.extend(["--output", output_path.strip()])
     if snapshot_date:
         command.extend(["--date", snapshot_date])
@@ -66,16 +70,17 @@ def build_command(
     return command
 
 
-class DownloaderApp(ttk.Frame):
-    def __init__(self, master: tk.Tk) -> None:
-        super().__init__(master, padding=20)
+class DownloaderApp(ctk.CTkFrame):
+    def __init__(self, master: ctk.CTk) -> None:
+        super().__init__(master, fg_color=WHITE, corner_radius=0)
         self.master = master
+        now = datetime.now(timezone.utc)
         self.source_mode = tk.StringVar(value="bbox")
         self.coordinates = {name: tk.StringVar(value=value) for name, value in (("南", "30.742"), ("西", "120.480"), ("北", "30.750"), ("东", "120.490"))}
         self.shp_path = tk.StringVar()
         self.output_path = tk.StringVar(value=str(PROJECT_DIR / "data" / "buildings.geojson"))
+        self.output_format = tk.StringVar(value=OUTPUT_FORMATS[0])
         self.snapshot_preset = tk.StringVar(value="最新数据")
-        now = datetime.now(timezone.utc)
         self.snapshot_year = tk.StringVar(value=str(now.year))
         self.snapshot_month = tk.StringVar(value=f"{now.month:02d}")
         self.snapshot_day = tk.StringVar(value=f"{now.day:02d}")
@@ -88,132 +93,130 @@ class DownloaderApp(ttk.Frame):
         self.running = False
         self.snapshot_year.trace_add("write", self._update_days)
         self.snapshot_month.trace_add("write", self._update_days)
-        self._configure_style()
         self._build()
         self.after(100, self._handle_events)
 
-    def _configure_style(self) -> None:
-        style = ttk.Style(self.master)
-        style.theme_use("clam")
-        self.master.configure(background="#ffffff")
-        style.configure("TFrame", background="#ffffff")
-        style.configure("TLabel", background="#ffffff", foreground="#111111")
-        style.configure("Title.TLabel", font=("TkDefaultFont", 20, "bold"), foreground="#000000")
-        style.configure("Subtitle.TLabel", foreground="#555555")
-        style.configure("Card.TLabelframe", background="#ffffff", bordercolor="#d8d8d8", padding=16)
-        style.configure("Card.TLabelframe.Label", background="#ffffff", font=("TkDefaultFont", 11, "bold"), foreground="#000000")
-        style.configure("TEntry", fieldbackground="#ffffff", foreground="#111111", bordercolor="#bdbdbd")
-        style.configure("TCombobox", fieldbackground="#ffffff", foreground="#111111", bordercolor="#bdbdbd")
-        style.configure("Accent.TButton", background="#000000", foreground="#ffffff", padding=(16, 8), font=("TkDefaultFont", 10, "bold"))
-        style.map("Accent.TButton", background=[("active", "#2b2b2b"), ("disabled", "#777777")])
-
     def _build(self) -> None:
         self.master.title("OSM 建筑矢量下载器")
-        self.master.minsize(860, 700)
+        self.master.minsize(980, 720)
+        self.master.configure(fg_color=WHITE)
         self.grid(sticky="nsew")
         self.master.columnconfigure(0, weight=1)
         self.master.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(4, weight=1)
+        self.rowconfigure(2, weight=1)
 
-        header = ttk.Frame(self)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
-        ttk.Label(header, text="OSM 建筑矢量下载器", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(header, text="下载当前或历史建筑轮廓，支持研究区 SHP、严格裁剪和自动重试。", style="Subtitle.TLabel").pack(anchor="w", pady=(3, 0))
+        header = ctk.CTkFrame(self, fg_color=WHITE)
+        header.grid(row=0, column=0, sticky="ew", padx=34, pady=(28, 18))
+        ctk.CTkLabel(header, text="OSM 建筑矢量下载器", text_color=BLACK, font=ctk.CTkFont(size=25, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(header, text="选择范围、快照时间和输出格式，获取可直接用于 GIS 的建筑数据。", text_color=MUTED, font=ctk.CTkFont(size=13)).pack(anchor="w", pady=(4, 0))
 
-        self._build_extent_card()
-        self._build_options_card()
-        self._build_output_card()
+        body = ctk.CTkFrame(self, fg_color=WHITE)
+        body.grid(row=1, column=0, sticky="nsew", padx=34)
+        body.columnconfigure(0, weight=3)
+        body.columnconfigure(1, weight=2)
+        self._build_query_panel(body)
+        self._build_export_panel(body)
         self._build_log()
 
-    def _build_extent_card(self) -> None:
-        card = ttk.LabelFrame(self, text="1. 选择下载范围", style="Card.TLabelframe")
-        card.grid(row=1, column=0, sticky="ew", pady=(0, 12))
-        card.columnconfigure(1, weight=1)
-        ttk.Radiobutton(card, text="输入经纬度范围", variable=self.source_mode, value="bbox", command=self._update_source_state).grid(row=0, column=0, sticky="w")
-        coordinate_frame = ttk.Frame(card)
-        coordinate_frame.grid(row=0, column=1, sticky="ew", padx=(16, 0))
-        self.coordinate_entries: list[ttk.Entry] = []
+    def _card(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
+        return ctk.CTkFrame(parent, fg_color=PANEL, border_color=BORDER, border_width=1, corner_radius=14)
+
+    def _section_title(self, parent: ctk.CTkFrame, number: str, title: str, subtitle: str) -> None:
+        ctk.CTkLabel(parent, text=f"{number}  {title}", text_color=BLACK, font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", padx=18, pady=(17, 1))
+        ctk.CTkLabel(parent, text=subtitle, text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", padx=18, pady=(0, 14))
+
+    def _build_query_panel(self, parent: ctk.CTkFrame) -> None:
+        panel = ctk.CTkFrame(parent, fg_color=WHITE)
+        panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        panel.columnconfigure(0, weight=1)
+
+        extent = self._card(panel)
+        extent.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        self._section_title(extent, "01", "下载范围", "输入 WGS84 坐标，或选择一个 SHP 研究区。")
+        radio_frame = ctk.CTkFrame(extent, fg_color="transparent")
+        radio_frame.pack(fill="x", padx=18, pady=(0, 10))
+        ctk.CTkRadioButton(radio_frame, text="经纬度范围", variable=self.source_mode, value="bbox", command=self._update_source_state, fg_color=BLACK, hover_color="#333333", text_color=BLACK).pack(side="left")
+        ctk.CTkRadioButton(radio_frame, text="SHP 研究区", variable=self.source_mode, value="shp", command=self._update_source_state, fg_color=BLACK, hover_color="#333333", text_color=BLACK).pack(side="left", padx=22)
+        coordinates = ctk.CTkFrame(extent, fg_color="transparent")
+        coordinates.pack(fill="x", padx=18, pady=(0, 8))
+        self.coordinate_entries: list[ctk.CTkEntry] = []
         for column, name in enumerate(("南", "西", "北", "东")):
-            ttk.Label(coordinate_frame, text=name).grid(row=0, column=column * 2, sticky="w")
-            entry = ttk.Entry(coordinate_frame, textvariable=self.coordinates[name], width=13)
-            entry.grid(row=0, column=column * 2 + 1, padx=(4, 12), sticky="ew")
+            coordinates.columnconfigure(column, weight=1)
+            field = ctk.CTkFrame(coordinates, fg_color="transparent")
+            field.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 6, 0))
+            ctk.CTkLabel(field, text=name, text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 4))
+            entry = ctk.CTkEntry(field, textvariable=self.coordinates[name], fg_color=WHITE, border_color=BORDER, text_color=BLACK, height=34)
+            entry.pack(fill="x")
             self.coordinate_entries.append(entry)
-        ttk.Label(card, text="WGS84 / EPSG:4326；南 < 北，西 < 东。", style="Subtitle.TLabel").grid(row=1, column=1, sticky="w", padx=(16, 0), pady=(4, 0))
+        ctk.CTkLabel(extent, text="顺序已固定为：南、西、北、东。", text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", padx=18, pady=(0, 12))
+        shp_row = ctk.CTkFrame(extent, fg_color="transparent")
+        shp_row.pack(fill="x", padx=18, pady=(0, 18))
+        self.shp_entry = ctk.CTkEntry(shp_row, textvariable=self.shp_path, placeholder_text="选择 .shp 研究区文件", fg_color=WHITE, border_color=BORDER, text_color=BLACK, height=34)
+        self.shp_entry.pack(side="left", fill="x", expand=True)
+        self.shp_button = ctk.CTkButton(shp_row, text="浏览", width=76, height=34, fg_color=WHITE, border_width=1, border_color=BLACK, text_color=BLACK, hover_color="#EDEDED", command=self._choose_shp)
+        self.shp_button.pack(side="left", padx=(8, 0))
 
-        ttk.Radiobutton(card, text="选择 SHP 研究区", variable=self.source_mode, value="shp", command=self._update_source_state).grid(row=2, column=0, sticky="w", pady=(12, 0))
-        self.shp_entry = ttk.Entry(card, textvariable=self.shp_path)
-        self.shp_entry.grid(row=2, column=1, sticky="ew", padx=(16, 8), pady=(12, 0))
-        self.shp_button = ttk.Button(card, text="浏览…", command=self._choose_shp)
-        self.shp_button.grid(row=2, column=2, sticky="e", pady=(12, 0))
-        ttk.Label(card, text="将自动读取 .prj 并严格裁剪建筑轮廓。", style="Subtitle.TLabel").grid(row=3, column=1, sticky="w", padx=(16, 0), pady=(4, 0))
-
-    def _build_options_card(self) -> None:
-        card = ttk.LabelFrame(self, text="2. 选择数据时间与下载选项", style="Card.TLabelframe")
-        card.grid(row=2, column=0, sticky="ew", pady=(0, 12))
-        card.columnconfigure(1, weight=1)
-        ttk.Label(card, text="数据快照").grid(row=0, column=0, sticky="w")
-        self.preset_box = ttk.Combobox(card, textvariable=self.snapshot_preset, values=PRESETS, state="readonly", width=16)
-        self.preset_box.grid(row=0, column=1, sticky="w", padx=(16, 10))
-        self.preset_box.bind("<<ComboboxSelected>>", self._apply_preset)
-
-        ttk.Label(card, text="日期（UTC）").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        datetime_frame = ttk.Frame(card)
-        datetime_frame.grid(row=1, column=1, columnspan=2, sticky="w", padx=(16, 0), pady=(10, 0))
-        self.date_time_boxes: list[ttk.Combobox] = []
+        snapshot = self._card(panel)
+        snapshot.grid(row=1, column=0, sticky="ew")
+        self._section_title(snapshot, "02", "历史快照", "所有日期和时间均按 UTC 解释。")
+        preset = ctk.CTkOptionMenu(snapshot, variable=self.snapshot_preset, values=list(PRESETS), command=self._apply_preset, fg_color=WHITE, button_color=BLACK, button_hover_color="#333333", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=34)
+        preset.pack(anchor="w", padx=18, pady=(0, 12))
+        date_frame = ctk.CTkFrame(snapshot, fg_color="transparent")
+        date_frame.pack(fill="x", padx=18, pady=(0, 18))
+        self.date_time_boxes: list[ctk.CTkOptionMenu] = []
         current_year = datetime.now(timezone.utc).year
-        for label, variable, values, width in (("年", self.snapshot_year, [str(value) for value in range(current_year, 2003, -1)], 5), ("月", self.snapshot_month, [f"{value:02d}" for value in range(1, 13)], 3), ("日", self.snapshot_day, [f"{value:02d}" for value in range(1, 32)], 3), ("时", self.snapshot_hour, [f"{value:02d}" for value in range(24)], 3), ("分", self.snapshot_minute, [f"{value:02d}" for value in range(60)], 3), ("秒", self.snapshot_second, [f"{value:02d}" for value in range(60)], 3)):
-            box_widget = ttk.Combobox(datetime_frame, textvariable=variable, values=values, state="readonly", width=width)
-            box_widget.pack(side="left")
-            ttk.Label(datetime_frame, text=label).pack(side="left", padx=(2, 8))
-            self.date_time_boxes.append(box_widget)
-        ttk.Label(card, text="所有时间均为 UTC；选择“最新数据”时不会发送历史日期。", style="Subtitle.TLabel").grid(row=2, column=1, columnspan=2, sticky="w", padx=(16, 0), pady=(4, 0))
-
-        ttk.Separator(card).grid(row=3, column=0, columnspan=3, sticky="ew", pady=12)
-        ttk.Label(card, text="网格大小（度）").grid(row=4, column=0, sticky="w")
-        ttk.Entry(card, textvariable=self.tile_size, width=16).grid(row=4, column=1, sticky="w", padx=(16, 10))
-        ttk.Label(card, text="0 表示不分块；推荐保留 0.05。", style="Subtitle.TLabel").grid(row=4, column=2, sticky="w")
-        ttk.Label(card, text="每端点重试次数").grid(row=5, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(card, textvariable=self.retries, width=16).grid(row=5, column=1, sticky="w", padx=(16, 10), pady=(8, 0))
-        ttk.Label(card, text="网络波动时会自动切换备用服务。", style="Subtitle.TLabel").grid(row=5, column=2, sticky="w", pady=(8, 0))
+        controls = (("年", self.snapshot_year, [str(value) for value in range(current_year, 2003, -1)]), ("月", self.snapshot_month, [f"{value:02d}" for value in range(1, 13)]), ("日", self.snapshot_day, [f"{value:02d}" for value in range(1, 32)]), ("时", self.snapshot_hour, [f"{value:02d}" for value in range(24)]), ("分", self.snapshot_minute, [f"{value:02d}" for value in range(60)]), ("秒", self.snapshot_second, [f"{value:02d}" for value in range(60)]))
+        for index, (label, variable, values) in enumerate(controls):
+            field = ctk.CTkFrame(date_frame, fg_color="transparent")
+            field.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 6, 0))
+            ctk.CTkLabel(field, text=label, text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 4))
+            menu = ctk.CTkOptionMenu(field, variable=variable, values=values, fg_color=WHITE, button_color=BLACK, button_hover_color="#333333", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=34, width=70)
+            menu.pack(fill="x")
+            self.date_time_boxes.append(menu)
         self._update_snapshot_state()
 
-    def _build_output_card(self) -> None:
-        card = ttk.LabelFrame(self, text="3. 保存结果", style="Card.TLabelframe")
-        card.grid(row=3, column=0, sticky="ew", pady=(0, 12))
-        card.columnconfigure(0, weight=1)
-        ttk.Label(card, text="输出文件（.geojson / .shp）", style="Subtitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 5))
-        ttk.Entry(card, textvariable=self.output_path).grid(row=1, column=0, sticky="ew", padx=(0, 8))
-        ttk.Button(card, text="选择位置…", command=self._choose_output).grid(row=1, column=1)
-        controls = ttk.Frame(card)
-        controls.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
-        self.download_button = ttk.Button(controls, text="开始下载", style="Accent.TButton", command=self._start_download)
-        self.download_button.pack(side="left")
-        ttk.Button(controls, text="清空日志", command=self._clear_log).pack(side="left", padx=8)
-        self.progress = ttk.Progressbar(controls, mode="indeterminate", length=180)
-        self.progress.pack(side="right")
+    def _build_export_panel(self, parent: ctk.CTkFrame) -> None:
+        panel = self._card(parent)
+        panel.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        self._section_title(panel, "03", "导出设置", "选择格式和保存位置后开始下载。")
+        ctk.CTkLabel(panel, text="保存文件类型", text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", padx=18, pady=(0, 4))
+        format_menu = ctk.CTkOptionMenu(panel, variable=self.output_format, values=list(OUTPUT_FORMATS), command=self._change_output_format, fg_color=WHITE, button_color=BLACK, button_hover_color="#333333", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=36)
+        format_menu.pack(fill="x", padx=18, pady=(0, 14))
+        ctk.CTkLabel(panel, text="输出位置", text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", padx=18, pady=(0, 4))
+        self.output_entry = ctk.CTkEntry(panel, textvariable=self.output_path, fg_color=WHITE, border_color=BORDER, text_color=BLACK, height=36)
+        self.output_entry.pack(fill="x", padx=18)
+        ctk.CTkButton(panel, text="选择保存位置", height=34, fg_color=WHITE, border_width=1, border_color=BLACK, text_color=BLACK, hover_color="#EDEDED", command=self._choose_output).pack(fill="x", padx=18, pady=(8, 16))
+        ctk.CTkLabel(panel, text="高级选项", text_color=BLACK, font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=18, pady=(2, 9))
+        self._labeled_entry(panel, "网格大小（度）", self.tile_size, "0 表示不分块")
+        self._labeled_entry(panel, "每端点重试次数", self.retries, "默认 2")
+        self.download_button = ctk.CTkButton(panel, text="开始下载", height=42, fg_color=BLACK, hover_color="#333333", text_color=WHITE, font=ctk.CTkFont(size=14, weight="bold"), command=self._start_download)
+        self.download_button.pack(fill="x", padx=18, pady=(22, 8))
+        self.progress = ctk.CTkProgressBar(panel, mode="indeterminate", progress_color=BLACK, fg_color="#E5E5E5")
+        self.progress.pack(fill="x", padx=18, pady=(0, 18))
+
+    def _labeled_entry(self, parent: ctk.CTkFrame, label: str, variable: tk.StringVar, hint: str) -> None:
+        ctk.CTkLabel(parent, text=label, text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", padx=18, pady=(0, 4))
+        ctk.CTkEntry(parent, textvariable=variable, placeholder_text=hint, fg_color=WHITE, border_color=BORDER, text_color=BLACK, height=34).pack(fill="x", padx=18, pady=(0, 10))
 
     def _build_log(self) -> None:
-        card = ttk.LabelFrame(self, text="运行日志", style="Card.TLabelframe")
-        card.grid(row=4, column=0, sticky="nsew")
-        card.columnconfigure(0, weight=1)
-        card.rowconfigure(0, weight=1)
-        self.log = tk.Text(card, height=9, wrap="word", state="disabled", relief="flat", background="#ffffff", foreground="#111111", highlightthickness=0)
-        scrollbar = ttk.Scrollbar(card, orient="vertical", command=self.log.yview)
-        self.log.configure(yscrollcommand=scrollbar.set)
-        self.log.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self._write_log("就绪：请选择范围、快照时间与输出位置。")
+        log_card = self._card(self)
+        log_card.grid(row=2, column=0, sticky="nsew", padx=34, pady=(16, 28))
+        log_card.columnconfigure(0, weight=1)
+        log_card.rowconfigure(1, weight=1)
+        ctk.CTkLabel(log_card, text="运行日志", text_color=BLACK, font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, sticky="w", padx=18, pady=(14, 8))
+        self.log = ctk.CTkTextbox(log_card, height=145, fg_color=WHITE, border_color=BORDER, border_width=1, text_color=BLACK, corner_radius=8, font=ctk.CTkFont(size=12))
+        self.log.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 14))
+        self._write_log("就绪：请选择范围、快照和保存格式。")
 
     def _update_source_state(self) -> None:
         is_bbox = self.source_mode.get() == "bbox"
         for entry in self.coordinate_entries:
             entry.configure(state="normal" if is_bbox else "disabled")
         self.shp_entry.configure(state="disabled" if is_bbox else "normal")
-        self.shp_button.configure(state="disabled" if is_bbox else "normal")
+        self.shp_button.configure(state="normal" if is_bbox else "disabled")
 
-    def _apply_preset(self, _event: object = None) -> None:
-        preset = self.snapshot_preset.get()
+    def _apply_preset(self, preset: str) -> None:
         offsets = {"1 天前": 1, "7 天前": 7, "30 天前": 30, "90 天前": 90, "1 年前": 365}
         if preset in offsets:
             target = datetime.now(timezone.utc).date() - timedelta(days=offsets[preset])
@@ -236,37 +239,37 @@ class DownloaderApp(ttk.Frame):
             self.snapshot_day.set(values[-1])
 
     def _update_snapshot_state(self) -> None:
-        enabled = self.snapshot_preset.get() != "最新数据"
-        for box_widget in self.date_time_boxes:
-            box_widget.configure(state="readonly" if enabled else "disabled")
+        state = "disabled" if self.snapshot_preset.get() == "最新数据" else "normal"
+        for menu in self.date_time_boxes:
+            menu.configure(state=state)
 
     def _snapshot_value(self) -> str:
         if self.snapshot_preset.get() == "最新数据":
             return ""
-        return snapshot_to_iso(date(int(self.snapshot_year.get()), int(self.snapshot_month.get()), int(self.snapshot_day.get())), self.snapshot_hour.get(), self.snapshot_minute.get(), self.snapshot_second.get())
+        selected_date = date(int(self.snapshot_year.get()), int(self.snapshot_month.get()), int(self.snapshot_day.get()))
+        return snapshot_to_iso(selected_date, self.snapshot_hour.get(), self.snapshot_minute.get(), self.snapshot_second.get())
+
+    def _change_output_format(self, output_format: str) -> None:
+        path = Path(self.output_path.get() or "buildings.geojson")
+        self.output_path.set(str(path.with_suffix(output_extension(output_format))))
 
     def _choose_shp(self) -> None:
         path = filedialog.askopenfilename(title="选择研究区 SHP 文件", filetypes=[("Shapefile", "*.shp")])
         if path:
             self.shp_path.set(path)
-            if not self.output_path.get() or self.output_path.get().endswith("buildings.geojson"):
-                self.output_path.set(str(Path(path).with_name(f"{Path(path).stem}_buildings.geojson")))
+            if self.output_path.get().endswith(("buildings.geojson", "buildings.shp")):
+                self.output_path.set(str(Path(path).with_name(f"{Path(path).stem}_buildings{output_extension(self.output_format.get())}")))
 
     def _choose_output(self) -> None:
-        path = filedialog.asksaveasfilename(title="保存建筑数据", defaultextension=".geojson", filetypes=[("GeoJSON", "*.geojson *.json"), ("Shapefile", "*.shp")])
-        if path:
-            self.output_path.set(path)
+        extension = output_extension(self.output_format.get())
+        selected = filedialog.asksaveasfilename(title="保存建筑数据", defaultextension=extension, filetypes=[("GeoJSON", "*.geojson *.json"), ("Shapefile", "*.shp")])
+        if selected:
+            selected_path = Path(selected)
+            self.output_path.set(str(selected_path.with_suffix(extension)))
 
     def _write_log(self, text: str) -> None:
-        self.log.configure(state="normal")
         self.log.insert("end", text.rstrip() + "\n")
         self.log.see("end")
-        self.log.configure(state="disabled")
-
-    def _clear_log(self) -> None:
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
 
     def _start_download(self) -> None:
         if self.running:
@@ -278,15 +281,14 @@ class DownloaderApp(ttk.Frame):
             return
         self.running = True
         self.download_button.configure(state="disabled")
-        self.progress.start(10)
+        self.progress.start()
         self._write_log("开始下载…")
         threading.Thread(target=self._run_download, args=(command,), daemon=True).start()
 
     def _run_download(self, command: Sequence[str]) -> None:
         try:
             completed = subprocess.run(command, cwd=PROJECT_DIR, text=True, capture_output=True, check=False)
-            output = (completed.stdout + completed.stderr).strip()
-            self.events.put(("log", output or "下载程序未输出日志。"))
+            self.events.put(("log", (completed.stdout + completed.stderr).strip() or "下载程序未输出日志。"))
             self.events.put(("finished", completed.returncode))
         except OSError as error:
             self.events.put(("log", f"无法启动下载程序：{error}"))
@@ -305,14 +307,15 @@ class DownloaderApp(ttk.Frame):
                     if payload == 0:
                         messagebox.showinfo("下载完成", f"建筑数据已保存至：\n{self.output_path.get()}", parent=self.master)
                     else:
-                        messagebox.showerror("下载失败", "请查看下方日志，并检查网络、范围和参数。", parent=self.master)
+                        messagebox.showerror("下载失败", "请查看运行日志，并检查网络、范围和参数。", parent=self.master)
         except queue.Empty:
             pass
         self.after(100, self._handle_events)
 
 
 def main() -> None:
-    root = tk.Tk()
+    ctk.set_appearance_mode("light")
+    root = ctk.CTk(fg_color=WHITE)
     DownloaderApp(root)
     root.mainloop()
 
