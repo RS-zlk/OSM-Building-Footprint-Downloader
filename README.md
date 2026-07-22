@@ -37,6 +37,17 @@ python download_buildings.py \
 
 输出文件可直接用于 QGIS、GeoPandas、Leaflet 和 Folium。
 
+## 图形界面
+
+不熟悉命令行时，可在项目 Conda 环境中启动桌面界面：
+
+```bash
+conda activate osm-buildings
+python gui.py
+```
+
+界面支持输入经纬度范围或选择 SHP 研究区、选择历史快照和输出位置，并会在后台执行下载，显示完成状态与错误日志。SHP 模式沿用命令行的坐标系识别、范围裁剪、分块和重试逻辑。
+
 ### 使用 SHP 文件确定下载范围
 
 使用 `--shp` 替代 `--bbox`。程序读取所有 Polygon/MultiPolygon 要素，依据同名 `.prj` 文件自动转换坐标系至 WGS84，并把结果严格裁剪到研究区边界。
