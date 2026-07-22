@@ -27,6 +27,8 @@ WHITE = "#FFFFFF"
 PANEL = "#F7F7F7"
 BORDER = "#E2E2E2"
 MUTED = "#666666"
+CONTROL = "#EEEEEE"
+CONTROL_HOVER = "#DEDEDE"
 
 
 def snapshot_to_iso(day: date, hour: str, minute: str, second: str) -> str:
@@ -160,18 +162,18 @@ class DownloaderApp(ctk.CTkFrame):
         snapshot = self._card(panel)
         snapshot.grid(row=1, column=0, sticky="ew")
         self._section_title(snapshot, "02", "历史快照", "所有日期和时间均按 UTC 解释。")
-        preset = ctk.CTkOptionMenu(snapshot, variable=self.snapshot_preset, values=list(PRESETS), command=self._apply_preset, fg_color=WHITE, button_color=BLACK, button_hover_color="#333333", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=34)
+        preset = ctk.CTkOptionMenu(snapshot, variable=self.snapshot_preset, values=list(PRESETS), command=self._apply_preset, fg_color=CONTROL, button_color=CONTROL_HOVER, button_hover_color="#CFCFCF", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=34)
         preset.pack(anchor="w", padx=18, pady=(0, 12))
         date_frame = ctk.CTkFrame(snapshot, fg_color="transparent")
         date_frame.pack(fill="x", padx=18, pady=(0, 18))
-        self.date_time_boxes: list[ctk.CTkOptionMenu] = []
+        self.date_time_boxes: list[ctk.CTkComboBox] = []
         current_year = datetime.now(timezone.utc).year
         controls = (("年", self.snapshot_year, [str(value) for value in range(current_year, 2003, -1)]), ("月", self.snapshot_month, [f"{value:02d}" for value in range(1, 13)]), ("日", self.snapshot_day, [f"{value:02d}" for value in range(1, 32)]), ("时", self.snapshot_hour, [f"{value:02d}" for value in range(24)]), ("分", self.snapshot_minute, [f"{value:02d}" for value in range(60)]), ("秒", self.snapshot_second, [f"{value:02d}" for value in range(60)]))
         for index, (label, variable, values) in enumerate(controls):
             field = ctk.CTkFrame(date_frame, fg_color="transparent")
             field.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 6, 0))
             ctk.CTkLabel(field, text=label, text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 4))
-            menu = ctk.CTkOptionMenu(field, variable=variable, values=values, fg_color=WHITE, button_color=BLACK, button_hover_color="#333333", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=34, width=70)
+            menu = ctk.CTkComboBox(field, variable=variable, values=values, fg_color=WHITE, border_color=BORDER, button_color=CONTROL_HOVER, button_hover_color="#CFCFCF", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=34, width=70)
             menu.pack(fill="x")
             self.date_time_boxes.append(menu)
         self._update_snapshot_state()
@@ -181,7 +183,7 @@ class DownloaderApp(ctk.CTkFrame):
         panel.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         self._section_title(panel, "03", "导出设置", "选择格式和保存位置后开始下载。")
         ctk.CTkLabel(panel, text="保存文件类型", text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", padx=18, pady=(0, 4))
-        format_menu = ctk.CTkOptionMenu(panel, variable=self.output_format, values=list(OUTPUT_FORMATS), command=self._change_output_format, fg_color=WHITE, button_color=BLACK, button_hover_color="#333333", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=36)
+        format_menu = ctk.CTkOptionMenu(panel, variable=self.output_format, values=list(OUTPUT_FORMATS), command=self._change_output_format, fg_color=CONTROL, button_color=CONTROL_HOVER, button_hover_color="#CFCFCF", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=36)
         format_menu.pack(fill="x", padx=18, pady=(0, 14))
         ctk.CTkLabel(panel, text="输出位置", text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", padx=18, pady=(0, 4))
         self.output_entry = ctk.CTkEntry(panel, textvariable=self.output_path, fg_color=WHITE, border_color=BORDER, text_color=BLACK, height=36)
