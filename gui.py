@@ -7,15 +7,13 @@ import queue
 import subprocess
 import sys
 import threading
+from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-
-from tkcalendar import DateEntry
-
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DOWNLOADER = PROJECT_DIR / "download_buildings.py"
@@ -29,6 +27,11 @@ def snapshot_to_iso(day: date, hour: str, minute: str, second: str) -> str:
     except ValueError as error:
         raise ValueError("历史快照时间无效。") from error
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def available_days(year: str, month: str) -> list[str]:
+    """List valid zero-padded days for a selected year and month."""
+    return [f"{value:02d}" for value in range(1, monthrange(int(year), int(month))[1] + 1)]
 
 
 def build_command(
@@ -72,6 +75,10 @@ class DownloaderApp(ttk.Frame):
         self.shp_path = tk.StringVar()
         self.output_path = tk.StringVar(value=str(PROJECT_DIR / "data" / "buildings.geojson"))
         self.snapshot_preset = tk.StringVar(value="最新数据")
+        now = datetime.now(timezone.utc)
+        self.snapshot_year = tk.StringVar(value=str(now.year))
+        self.snapshot_month = tk.StringVar(value=f"{now.month:02d}")
+        self.snapshot_day = tk.StringVar(value=f"{now.day:02d}")
         self.snapshot_hour = tk.StringVar(value="00")
         self.snapshot_minute = tk.StringVar(value="00")
         self.snapshot_second = tk.StringVar(value="00")
@@ -79,6 +86,8 @@ class DownloaderApp(ttk.Frame):
         self.retries = tk.StringVar(value="2")
         self.events: queue.Queue[tuple[str, str | int]] = queue.Queue()
         self.running = False
+        self.snapshot_year.trace_add("write", self._update_days)
+        self.snapshot_month.trace_add("write", self._update_days)
         self._configure_style()
         self._build()
         self.after(100, self._handle_events)
@@ -86,15 +95,21 @@ class DownloaderApp(ttk.Frame):
     def _configure_style(self) -> None:
         style = ttk.Style(self.master)
         style.theme_use("clam")
-        style.configure("Title.TLabel", font=("TkDefaultFont", 19, "bold"), foreground="#12324a")
-        style.configure("Subtitle.TLabel", foreground="#526777")
-        style.configure("Card.TLabelframe", padding=14)
-        style.configure("Card.TLabelframe.Label", font=("TkDefaultFont", 11, "bold"), foreground="#12324a")
-        style.configure("Accent.TButton", padding=(14, 7), font=("TkDefaultFont", 10, "bold"))
+        self.master.configure(background="#ffffff")
+        style.configure("TFrame", background="#ffffff")
+        style.configure("TLabel", background="#ffffff", foreground="#111111")
+        style.configure("Title.TLabel", font=("TkDefaultFont", 20, "bold"), foreground="#000000")
+        style.configure("Subtitle.TLabel", foreground="#555555")
+        style.configure("Card.TLabelframe", background="#ffffff", bordercolor="#d8d8d8", padding=16)
+        style.configure("Card.TLabelframe.Label", background="#ffffff", font=("TkDefaultFont", 11, "bold"), foreground="#000000")
+        style.configure("TEntry", fieldbackground="#ffffff", foreground="#111111", bordercolor="#bdbdbd")
+        style.configure("TCombobox", fieldbackground="#ffffff", foreground="#111111", bordercolor="#bdbdbd")
+        style.configure("Accent.TButton", background="#000000", foreground="#ffffff", padding=(16, 8), font=("TkDefaultFont", 10, "bold"))
+        style.map("Accent.TButton", background=[("active", "#2b2b2b"), ("disabled", "#777777")])
 
     def _build(self) -> None:
         self.master.title("OSM 建筑矢量下载器")
-        self.master.minsize(820, 700)
+        self.master.minsize(860, 700)
         self.grid(sticky="nsew")
         self.master.columnconfigure(0, weight=1)
         self.master.rowconfigure(0, weight=1)
@@ -143,18 +158,16 @@ class DownloaderApp(ttk.Frame):
         self.preset_box.bind("<<ComboboxSelected>>", self._apply_preset)
 
         ttk.Label(card, text="日期（UTC）").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        self.date_picker = DateEntry(card, date_pattern="y-mm-dd", width=13)
-        self.date_picker.grid(row=1, column=1, sticky="w", padx=(16, 10), pady=(10, 0))
-        time_frame = ttk.Frame(card)
-        time_frame.grid(row=1, column=2, sticky="w", pady=(10, 0))
-        self.time_boxes = []
-        for variable, values, width in ((self.snapshot_hour, [f"{value:02d}" for value in range(24)], 3), (self.snapshot_minute, [f"{value:02d}" for value in range(60)], 3), (self.snapshot_second, [f"{value:02d}" for value in range(60)], 3)):
-            box_widget = ttk.Combobox(time_frame, textvariable=variable, values=values, state="readonly", width=width)
+        datetime_frame = ttk.Frame(card)
+        datetime_frame.grid(row=1, column=1, columnspan=2, sticky="w", padx=(16, 0), pady=(10, 0))
+        self.date_time_boxes: list[ttk.Combobox] = []
+        current_year = datetime.now(timezone.utc).year
+        for label, variable, values, width in (("年", self.snapshot_year, [str(value) for value in range(current_year, 2003, -1)], 5), ("月", self.snapshot_month, [f"{value:02d}" for value in range(1, 13)], 3), ("日", self.snapshot_day, [f"{value:02d}" for value in range(1, 32)], 3), ("时", self.snapshot_hour, [f"{value:02d}" for value in range(24)], 3), ("分", self.snapshot_minute, [f"{value:02d}" for value in range(60)], 3), ("秒", self.snapshot_second, [f"{value:02d}" for value in range(60)], 3)):
+            box_widget = ttk.Combobox(datetime_frame, textvariable=variable, values=values, state="readonly", width=width)
             box_widget.pack(side="left")
-            self.time_boxes.append(box_widget)
-            if variable is not self.snapshot_second:
-                ttk.Label(time_frame, text=":").pack(side="left", padx=2)
-        ttk.Label(card, text="选择“最新数据”时不会发送历史日期。", style="Subtitle.TLabel").grid(row=2, column=1, columnspan=2, sticky="w", padx=(16, 0), pady=(4, 0))
+            ttk.Label(datetime_frame, text=label).pack(side="left", padx=(2, 8))
+            self.date_time_boxes.append(box_widget)
+        ttk.Label(card, text="所有时间均为 UTC；选择“最新数据”时不会发送历史日期。", style="Subtitle.TLabel").grid(row=2, column=1, columnspan=2, sticky="w", padx=(16, 0), pady=(4, 0))
 
         ttk.Separator(card).grid(row=3, column=0, columnspan=3, sticky="ew", pady=12)
         ttk.Label(card, text="网格大小（度）").grid(row=4, column=0, sticky="w")
@@ -184,7 +197,7 @@ class DownloaderApp(ttk.Frame):
         card.grid(row=4, column=0, sticky="nsew")
         card.columnconfigure(0, weight=1)
         card.rowconfigure(0, weight=1)
-        self.log = tk.Text(card, height=9, wrap="word", state="disabled", relief="flat", background="#f7f9fb")
+        self.log = tk.Text(card, height=9, wrap="word", state="disabled", relief="flat", background="#ffffff", foreground="#111111", highlightthickness=0)
         scrollbar = ttk.Scrollbar(card, orient="vertical", command=self.log.yview)
         self.log.configure(yscrollcommand=scrollbar.set)
         self.log.grid(row=0, column=0, sticky="nsew")
@@ -202,22 +215,34 @@ class DownloaderApp(ttk.Frame):
         preset = self.snapshot_preset.get()
         offsets = {"1 天前": 1, "7 天前": 7, "30 天前": 30, "90 天前": 90, "1 年前": 365}
         if preset in offsets:
-            self.date_picker.set_date(datetime.now(timezone.utc).date() - timedelta(days=offsets[preset]))
+            target = datetime.now(timezone.utc).date() - timedelta(days=offsets[preset])
+            self.snapshot_year.set(str(target.year))
+            self.snapshot_month.set(f"{target.month:02d}")
+            self.snapshot_day.set(f"{target.day:02d}")
             self.snapshot_hour.set("00")
             self.snapshot_minute.set("00")
             self.snapshot_second.set("00")
         self._update_snapshot_state()
 
+    def _update_days(self, *_args: object) -> None:
+        try:
+            values = available_days(self.snapshot_year.get(), self.snapshot_month.get())
+        except ValueError:
+            return
+        if hasattr(self, "date_time_boxes"):
+            self.date_time_boxes[2].configure(values=values)
+        if self.snapshot_day.get() not in values:
+            self.snapshot_day.set(values[-1])
+
     def _update_snapshot_state(self) -> None:
         enabled = self.snapshot_preset.get() != "最新数据"
-        self.date_picker.configure(state="normal" if enabled else "disabled")
-        for box_widget in self.time_boxes:
+        for box_widget in self.date_time_boxes:
             box_widget.configure(state="readonly" if enabled else "disabled")
 
     def _snapshot_value(self) -> str:
         if self.snapshot_preset.get() == "最新数据":
             return ""
-        return snapshot_to_iso(self.date_picker.get_date(), self.snapshot_hour.get(), self.snapshot_minute.get(), self.snapshot_second.get())
+        return snapshot_to_iso(date(int(self.snapshot_year.get()), int(self.snapshot_month.get()), int(self.snapshot_day.get())), self.snapshot_hour.get(), self.snapshot_minute.get(), self.snapshot_second.get())
 
     def _choose_shp(self) -> None:
         path = filedialog.askopenfilename(title="选择研究区 SHP 文件", filetypes=[("Shapefile", "*.shp")])

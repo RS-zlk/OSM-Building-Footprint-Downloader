@@ -6,6 +6,3 @@ dependencies:
   - pyproj
   - pyshp
   - shapely
-  - pip
-  - pip:
-      - tkcalendar==1.6.1

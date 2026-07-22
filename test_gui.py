@@ -2,7 +2,7 @@ import sys
 import unittest
 from datetime import date
 
-from gui import DOWNLOADER, build_command, snapshot_to_iso
+from gui import DOWNLOADER, available_days, build_command, snapshot_to_iso
 
 
 class GuiCommandTests(unittest.TestCase):
@@ -18,6 +18,10 @@ class GuiCommandTests(unittest.TestCase):
 
     def test_structured_snapshot_is_utc(self):
         self.assertEqual(snapshot_to_iso(date(2024, 2, 29), "12", "34", "56"), "2024-02-29T12:34:56Z")
+
+    def test_day_choices_follow_selected_month(self):
+        self.assertEqual(available_days("2024", "02")[-1], "29")
+        self.assertEqual(available_days("2025", "02")[-1], "28")
 
 
 if __name__ == "__main__":
