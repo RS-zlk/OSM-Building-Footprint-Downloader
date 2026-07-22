@@ -7,14 +7,14 @@ from gui import DOWNLOADER, available_days, build_command, output_extension, sna
 
 class GuiCommandTests(unittest.TestCase):
     def test_bbox_command(self):
-        command = build_command("bbox", ["30.0", "120.0", "31.0", "121.0"], "", "data/out.geojson", "2024-01-01T00:00:00Z", "0.05", "2")
+        command = build_command("bbox", ["30.0", "120.0", "31.0", "121.0"], "", "out.geojson", "2024-01-01T00:00:00Z", "0.05", "2")
         self.assertEqual(command[:2], [sys.executable, str(DOWNLOADER)])
         self.assertIn("--bbox", command)
         self.assertIn("--date", command)
 
     def test_shp_requires_path(self):
         with self.assertRaisesRegex(ValueError, "SHP"):
-            build_command("shp", "", "", "data/out.geojson", "", "", "")
+            build_command("shp", "", "", "out.geojson", "", "", "")
 
     def test_structured_snapshot_is_utc(self):
         self.assertEqual(snapshot_to_iso(date(2024, 2, 29), "12", "34", "56"), "2024-02-29T12:34:56Z")
@@ -39,13 +39,13 @@ class GuiCommandTests(unittest.TestCase):
 
     def test_invalid_bbox_is_rejected_before_starting_download(self):
         with self.assertRaisesRegex(ValueError, "南 < 北"):
-            validate_download_inputs("bbox", ["31", "120", "30", "121"], "", "data/out.geojson", "0.05", "2")
+            validate_download_inputs("bbox", ["31", "120", "30", "121"], "", "out.geojson", "0.05", "2")
 
     def test_invalid_advanced_options_are_rejected_before_starting_download(self):
         with self.assertRaisesRegex(ValueError, "不能小于 0"):
-            validate_download_inputs("bbox", ["30", "120", "31", "121"], "", "data/out.geojson", "-0.05", "2")
+            validate_download_inputs("bbox", ["30", "120", "31", "121"], "", "out.geojson", "-0.05", "2")
         with self.assertRaisesRegex(ValueError, "不能小于 0"):
-            validate_download_inputs("bbox", ["30", "120", "31", "121"], "", "data/out.geojson", "0.05", "-1")
+            validate_download_inputs("bbox", ["30", "120", "31", "121"], "", "out.geojson", "0.05", "-1")
 
 
 if __name__ == "__main__":
