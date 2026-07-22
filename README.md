@@ -2,6 +2,15 @@
 
 从 OpenStreetMap 的 Overpass API 下载指定范围内的建筑轮廓，并转换为标准 GeoJSON。支持当前或历史快照、SHP 研究区、自动坐标转换、分块下载和请求重试。
 
+## 特性
+
+- 下载当前或指定 UTC 时刻的 OSM 建筑轮廓。
+- 按经纬度范围或 SHP Polygon/MultiPolygon 研究区查询。
+- 自动识别 `.prj` 坐标系、转换至 WGS84，并严格裁剪输出。
+- 处理普通建筑 way 和 multipolygon relation，保留孔洞。
+- 为大范围自动分块，支持重试与 Overpass 端点故障切换。
+- 提供命令行与桌面 GUI 两种工作方式。
+
 ## 环境
 
 推荐使用项目提供的 Conda 环境：
@@ -48,6 +57,13 @@ python gui.py
 
 界面支持输入经纬度范围或选择 SHP 研究区、选择历史快照和输出位置，并会在后台执行下载，显示完成状态与错误日志。SHP 模式沿用命令行的坐标系识别、范围裁剪、分块和重试逻辑。
 
+- 经度和纬度使用四个独立输入框：南、西、北、东，不需要记忆空格或参数顺序。
+- 快照可选择“最新数据”、常用相对日期，或通过日历和时/分/秒下拉框指定任意 UTC 时刻。
+- 下载任务在后台执行，窗口保持可操作；完成或失败后可在运行日志中查看结果。
+
+> [!NOTE]
+> 历史快照的日期和时间均按 UTC 解释。数据是否可用取决于所选 Overpass 服务是否保留该时刻的历史数据。
+
 ### 使用 SHP 文件确定下载范围
 
 使用 `--shp` 替代 `--bbox`。程序读取所有 Polygon/MultiPolygon 要素，依据同名 `.prj` 文件自动转换坐标系至 WGS84，并把结果严格裁剪到研究区边界。
@@ -88,3 +104,13 @@ python download_buildings.py \
 ## 数据署名与许可
 
 数据来自 OpenStreetMap contributors，经 Overpass API 获取，遵循 [ODbL 1.0](https://opendatacommons.org/licenses/odbl/)。每个输出 GeoJSON 均写入数据来源、许可、查询范围与时间戳。
+
+## 开源贡献
+
+欢迎提交 issue 和 pull request。提交前请使用项目环境运行：
+
+```bash
+python -m unittest -v
+```
+
+请勿提交下载得到的大型数据文件；`data/` 已被 Git 忽略。使用 OSM 数据时，请保留相应的 OpenStreetMap 署名与 ODbL 许可信息。
