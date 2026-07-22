@@ -20,8 +20,8 @@ from urllib.request import Request, urlopen
 # base-environment path. This must happen before importing pyproj.
 _PROJ_DATA = Path(sys.prefix) / "share" / "proj"
 if _PROJ_DATA.is_dir():
-    os.environ.setdefault("PROJ_DATA", str(_PROJ_DATA))
-    os.environ.setdefault("PROJ_LIB", str(_PROJ_DATA))
+    os.environ["PROJ_DATA"] = str(_PROJ_DATA)
+    os.environ["PROJ_LIB"] = str(_PROJ_DATA)
 
 import shapefile
 from pyproj import CRS, Transformer, datadir
