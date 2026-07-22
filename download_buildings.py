@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download current or historical OSM building footprints as GeoJSON."""
+"""Download current or historical OSM building footprints as GeoJSON or SHP."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     extent = parser.add_mutually_exclusive_group(required=True)
     extent.add_argument("--bbox", nargs=4, type=float, metavar=("SOUTH", "WEST", "NORTH", "EAST"), help="WGS84 extent, ordered south west north east.")
     extent.add_argument("--shp", type=Path, help="Study-area ESRI Shapefile. Its geometry is used to clip results.")
-    parser.add_argument("--output", type=Path, required=True, help="Destination GeoJSON path.")
+    parser.add_argument("--output", type=Path, required=True, help="Destination .geojson, .json, or .shp path.")
     parser.add_argument("--endpoint", action="append", help="Overpass API URL. Repeat to define fallback endpoints.")
     parser.add_argument("--date", help="Optional historical OSM snapshot in ISO 8601 UTC, e.g. 2024-01-01T00:00:00Z.")
     parser.add_argument("--timeout", type=int, default=120, help="Overpass and HTTP timeout in seconds (default: 120).")
@@ -201,6 +201,77 @@ def convert_to_geojson(source: Iterable[dict[str, Any]], bbox: list[float], snap
     return {"type": "FeatureCollection", "metadata": {"source": "OpenStreetMap contributors, via Overpass API", "licence": "ODbL 1.0", "crs": "EPSG:4326 (WGS 84)", "query_bbox_wgs84_south_west_north_east": bbox, "requested_osm_snapshot_utc": snapshot_date, "downloaded_at_utc": datetime.now(timezone.utc).isoformat(), "note": note}, "features": features}
 
 
+def shapefile_field_name(name: str, used: set[str]) -> str:
+    """Return a unique DBF-compatible field name (ASCII and at most 10 chars)."""
+    normalized = "".join(character if character.isascii() and (character.isalnum() or character == "_") else "_" for character in name).upper().strip("_") or "FIELD"
+    normalized = normalized[:10]
+    candidate = normalized
+    suffix = 1
+    while candidate in used:
+        suffix_text = str(suffix)
+        candidate = f"{normalized[:10 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def shapefile_fields(features: list[dict[str, Any]]) -> list[tuple[str, str, str, int, int]]:
+    """Create DBF field definitions while preserving all feature properties."""
+    property_names = sorted({name for feature in features for name in feature["properties"]})
+    used: set[str] = set()
+    definitions = []
+    for name in property_names:
+        values = [feature["properties"].get(name) for feature in features if feature["properties"].get(name) is not None]
+        field_name = shapefile_field_name(name, used)
+        if values and all(isinstance(value, bool) for value in values):
+            definitions.append((name, field_name, "L", 1, 0))
+        elif values and all(isinstance(value, int) and not isinstance(value, bool) for value in values):
+            definitions.append((name, field_name, "N", 18, 0))
+        elif values and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
+            definitions.append((name, field_name, "F", 18, 6))
+        else:
+            definitions.append((name, field_name, "C", 254, 0))
+    return definitions
+
+
+def write_geojson(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def write_shapefile(path: Path, data: dict[str, Any]) -> None:
+    """Write polygon features plus CRS, metadata and DBF field mapping sidecars."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    features = data["features"]
+    fields = shapefile_fields(features)
+    with shapefile.Writer(str(path), shapeType=shapefile.POLYGON, encoding="utf-8") as writer:
+        for _original, field_name, field_type, size, decimal in fields:
+            writer.field(field_name, field_type, size=size, decimal=decimal)
+        for feature in features:
+            writer.shape(feature["geometry"])
+            record = []
+            for original, _field_name, field_type, _size, _decimal in fields:
+                value = feature["properties"].get(original)
+                record.append(str(value) if value is not None and field_type == "C" else value)
+            writer.record(*record)
+    path.with_suffix(".prj").write_text(CRS.from_epsg(4326).to_wkt(), encoding="utf-8")
+    path.with_suffix(".cpg").write_text("UTF-8\n", encoding="ascii")
+    path.with_suffix(".metadata.json").write_text(json.dumps(data["metadata"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    field_mapping = {field_name: original for original, field_name, _type, _size, _decimal in fields}
+    path.with_suffix(".fields.json").write_text(json.dumps(field_mapping, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def write_output(path: Path, data: dict[str, Any]) -> str:
+    suffix = path.suffix.lower()
+    if suffix in {".geojson", ".json"}:
+        write_geojson(path, data)
+        return "GeoJSON"
+    if suffix == ".shp":
+        write_shapefile(path, data)
+        return "Shapefile"
+    raise ValueError("--output must end in .geojson, .json, or .shp.")
+
+
 def main() -> int:
     args = parse_args()
     try:
@@ -226,9 +297,12 @@ def main() -> int:
         args.save_raw.write_text(json.dumps({"responses": raw_responses}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     geojson = convert_to_geojson(elements, bbox, snapshot_date, clip_geometry)
     geojson["metadata"]["query_tiles"] = len(tiles)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(geojson, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"Saved {len(geojson['features'])} building footprints from {len(tiles)} tile(s) to {args.output}")
+    try:
+        output_format = write_output(args.output, geojson)
+    except (OSError, ValueError, shapefile.ShapefileException) as error:
+        print(f"Output failed: {error}", file=sys.stderr)
+        return 1
+    print(f"Saved {len(geojson['features'])} building footprints as {output_format} from {len(tiles)} tile(s) to {args.output}")
     return 0
 
 

@@ -55,7 +55,7 @@ def build_command(
             raise ValueError("请完整填写南、西、北、东四个范围值。")
         command.extend(["--bbox", *values])
     if not output_path.strip():
-        raise ValueError("请选择输出 GeoJSON 文件。")
+            raise ValueError("请选择输出 GeoJSON 或 SHP 文件。")
     command.extend(["--output", output_path.strip()])
     if snapshot_date:
         command.extend(["--date", snapshot_date])
@@ -182,10 +182,11 @@ class DownloaderApp(ttk.Frame):
         card = ttk.LabelFrame(self, text="3. 保存结果", style="Card.TLabelframe")
         card.grid(row=3, column=0, sticky="ew", pady=(0, 12))
         card.columnconfigure(0, weight=1)
-        ttk.Entry(card, textvariable=self.output_path).grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        ttk.Button(card, text="选择位置…", command=self._choose_output).grid(row=0, column=1)
+        ttk.Label(card, text="输出文件（.geojson / .shp）", style="Subtitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 5))
+        ttk.Entry(card, textvariable=self.output_path).grid(row=1, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(card, text="选择位置…", command=self._choose_output).grid(row=1, column=1)
         controls = ttk.Frame(card)
-        controls.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        controls.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         self.download_button = ttk.Button(controls, text="开始下载", style="Accent.TButton", command=self._start_download)
         self.download_button.pack(side="left")
         ttk.Button(controls, text="清空日志", command=self._clear_log).pack(side="left", padx=8)
@@ -252,7 +253,7 @@ class DownloaderApp(ttk.Frame):
                 self.output_path.set(str(Path(path).with_name(f"{Path(path).stem}_buildings.geojson")))
 
     def _choose_output(self) -> None:
-        path = filedialog.asksaveasfilename(title="保存 GeoJSON", defaultextension=".geojson", filetypes=[("GeoJSON", "*.geojson *.json")])
+        path = filedialog.asksaveasfilename(title="保存建筑数据", defaultextension=".geojson", filetypes=[("GeoJSON", "*.geojson *.json"), ("Shapefile", "*.shp")])
         if path:
             self.output_path.set(path)
 

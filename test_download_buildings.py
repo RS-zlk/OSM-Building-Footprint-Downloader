@@ -57,6 +57,25 @@ class DownloadBuildingsTests(unittest.TestCase):
         self.assertAlmostEqual(area.bounds[2], 1.0, places=3)
         self.assertAlmostEqual(area.bounds[3], 1.0, places=3)
 
+    def test_write_shapefile_preserves_features_and_sidecars(self):
+        data = {
+            "metadata": {"crs": "EPSG:4326"},
+            "features": [
+                {"type": "Feature", "properties": {"osm_id": 1, "building:levels": "2", "名称": "测试建筑"}, "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]}},
+                {"type": "Feature", "properties": {"osm_id": 2, "building:levels": "3"}, "geometry": {"type": "MultiPolygon", "coordinates": [[[[2, 0], [3, 0], [3, 1], [2, 1], [2, 0]]], [[[4, 0], [5, 0], [5, 1], [4, 1], [4, 0]]]]}},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "buildings.shp"
+            self.assertEqual(app.write_output(path, data), "Shapefile")
+            reader = shapefile.Reader(str(path), encoding="utf-8")
+            self.assertEqual(len(reader), 2)
+            self.assertTrue(path.with_suffix(".prj").exists())
+            self.assertTrue(path.with_suffix(".cpg").exists())
+            mapping = app.json.loads(path.with_suffix(".fields.json").read_text(encoding="utf-8"))
+            self.assertIn("building:levels", mapping.values())
+            self.assertIn("名称", mapping.values())
+
 
 if __name__ == "__main__":
     unittest.main()
