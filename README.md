@@ -1,14 +1,19 @@
 # OSM 建筑矢量下载器
 
-从 OpenStreetMap 的 Overpass API 下载指定范围内的建筑面，并转换为标准 GeoJSON。
+从 OpenStreetMap 的 Overpass API 下载指定范围内的建筑轮廓，并转换为标准 GeoJSON。支持当前或历史快照、SHP 研究区、自动坐标转换、分块下载和请求重试。
 
 ## 环境
 
-仅依赖 Python 3 标准库，无需安装第三方包。
+推荐使用项目提供的 Conda 环境：
+
+```bash
+conda env create -f environment.yml
+conda activate osm-buildings
+```
 
 ## 用法
 
-经纬度范围的顺序必须是：`南 西 北 东`（WGS84 / EPSG:4326）。
+经纬度范围的顺序必须是：`南 西 北 东`（WGS84 / EPSG:4326）。程序会在范围较大时以 `0.05° × 0.05°` 网格自动分块，并对失败请求重试、在两个 Overpass 服务之间自动切换。
 
 ```bash
 python3 download_buildings.py \
@@ -34,7 +39,7 @@ python download_buildings.py \
 
 ### 使用 SHP 文件确定下载范围
 
-使用 `--shp` 替代 `--bbox`，程序会读取标准 ESRI Shapefile（`.shp`）文件头中的外接范围。SHP 坐标必须为 WGS84 经纬度（EPSG:4326）。
+使用 `--shp` 替代 `--bbox`。程序读取所有 Polygon/MultiPolygon 要素，依据同名 `.prj` 文件自动转换坐标系至 WGS84，并把结果严格裁剪到研究区边界。
 
 ```bash
 python download_buildings.py \
@@ -42,14 +47,30 @@ python download_buildings.py \
   --output data/study_area_buildings.geojson
 ```
 
-当前按 SHP 的最小外接矩形向 Overpass 查询，因此不规则研究区外、但仍位于该矩形内的建筑也会包含在结果中；如需严格按边界裁剪，可在 QGIS 等 GIS 软件中对输出进行裁剪。
+Overpass 查询仍使用研究区外接矩形以保证稳定性，但输出会严格裁剪到 SHP 边界，因此不会保留范围外建筑。若缺少 `.prj` 文件，可明确指定坐标系：`--shp-crs EPSG:3857`。
+
+### 稳定性与大范围下载
+
+```bash
+python download_buildings.py \
+  --bbox 30.742 120.480 30.850 120.600 \
+  --tile-size 0.02 \
+  --retries 3 \
+  --endpoint https://overpass-api.de/api/interpreter \
+  --endpoint https://overpass.kumi.systems/api/interpreter \
+  --output data/buildings.geojson
+```
+
+- `--tile-size 0` 可关闭自动分块；`--max-tiles` 用于避免意外提交过大的任务。
+- 多个 `--endpoint` 按顺序作为故障切换服务；不指定时使用内置的两个端点。
+- 可使用 `--save-raw` 保存每个网格的原始 Overpass 响应，便于复现和排查。
 
 ## 数据范围与限制
 
-- 查询对象：OSM 中标有 `building=*` 的闭合 way（建筑面）。
-- 复杂建筑 relation / multipolygon 当前不导出；通常占比较低，但需要完整覆盖时可另行扩展。
+- 查询对象：OSM 中标有 `building=*` 的闭合 way，以及标有 `building=*` 的 multipolygon relation。
+- relation 仅在其成员几何由 Overpass 完整返回时导出；不完整 relation 会被跳过。
 - 历史快照的可用年份和完整性取决于所用 Overpass 实例的历史数据保留情况。
-- 使用 SHP 文件时，文件坐标系必须是 WGS84（EPSG:4326）；本工具不自动执行坐标转换。
+- SHP 需要包含 Polygon/MultiPolygon；其 `.prj` 坐标参考文件应与数据一致。
 - 覆盖率取决于当地 OSM 制图完整度；中国部分小区域的建筑标注可能较少。
 - 请遵守 Overpass API 的合理使用原则：小范围查询、避免高频批量请求；大范围区域建议使用 Geofabrik PBF 数据。
 
