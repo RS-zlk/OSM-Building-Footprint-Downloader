@@ -27,6 +27,17 @@ class DownloadBuildingsTests(unittest.TestCase):
         geometry = app.relation_geometry(relation)
         self.assertAlmostEqual(geometry.area, 3.0)
 
+    def test_relation_stitches_open_member_ways(self):
+        relation = {
+            "members": [
+                {"role": "outer", "geometry": [{"lon": 0, "lat": 0}, {"lon": 1, "lat": 0}]},
+                {"role": "outer", "geometry": [{"lon": 1, "lat": 0}, {"lon": 1, "lat": 1}]},
+                {"role": "outer", "geometry": [{"lon": 1, "lat": 1}, {"lon": 0, "lat": 1}]},
+                {"role": "outer", "geometry": [{"lon": 0, "lat": 1}, {"lon": 0, "lat": 0}]},
+            ]
+        }
+        self.assertAlmostEqual(app.relation_geometry(relation).area, 1.0)
+
     def test_geojson_deduplication_and_clip(self):
         element = {"type": "way", "id": 1, "tags": {"building": "yes"}, "geometry": [{"lon": 0, "lat": 0}, {"lon": 2, "lat": 0}, {"lon": 2, "lat": 2}, {"lon": 0, "lat": 2}, {"lon": 0, "lat": 0}]}
         data = app.convert_to_geojson([element, element], [0, 0, 2, 2], None, box(0, 0, 1, 1))

@@ -205,8 +205,14 @@ def main() -> int:
     args = parse_args()
     try:
         clip_geometry = load_study_area(args.shp, args.shp_crs) if args.shp else None
-        bbox = list(clip_geometry.bounds[1::-1] + clip_geometry.bounds[3:1:-1]) if clip_geometry is not None else args.bbox
+        if clip_geometry is not None:
+            west, south, east, north = clip_geometry.bounds
+            bbox = [south, west, north, east]
+        else:
+            bbox = args.bbox
         validate_bbox(bbox)
+        if args.retries < 0:
+            raise ValueError("--retries must be zero or greater.")
         snapshot_date = parse_snapshot_date(args.date)
         tiles = split_bbox(bbox, args.tile_size, args.max_tiles)
         endpoints = tuple(args.endpoint) if args.endpoint else DEFAULT_ENDPOINTS
