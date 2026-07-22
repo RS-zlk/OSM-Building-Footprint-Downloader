@@ -173,7 +173,8 @@ class DownloaderApp(ctk.CTkFrame):
             field = ctk.CTkFrame(date_frame, fg_color="transparent")
             field.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 6, 0))
             ctk.CTkLabel(field, text=label, text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 4))
-            menu = ctk.CTkComboBox(field, variable=variable, values=values, fg_color=WHITE, border_color=BORDER, button_color=CONTROL_HOVER, button_hover_color="#CFCFCF", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=34, width=70)
+            menu_width = 112 if label == "年" else 78
+            menu = ctk.CTkComboBox(field, variable=variable, values=values, fg_color=WHITE, border_color=BORDER, button_color=CONTROL_HOVER, button_hover_color="#CFCFCF", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=34, width=menu_width)
             menu.pack(fill="x")
             self.date_time_boxes.append(menu)
         self._update_snapshot_state()
