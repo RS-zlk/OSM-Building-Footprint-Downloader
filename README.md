@@ -1,4 +1,6 @@
-# OSM 建筑矢量下载器
+# OSM Building Footprint Downloader
+
+> OSM 建筑轮廓下载器
 
 从 OpenStreetMap 的 Overpass API 下载指定范围内的建筑轮廓，并转换为标准 GeoJSON 或 Shapefile。支持当前或历史快照、SHP 研究区、自动坐标转换、分块下载和请求重试。
 
@@ -71,7 +73,8 @@ python gui.py
 界面支持输入经纬度范围或选择 SHP 研究区、选择历史快照和输出位置，并会在后台执行下载，显示完成状态与错误日志。通过“保存文件类型”下拉框选择 GeoJSON 或 Shapefile，界面会自动匹配输出文件扩展名；SHP 模式沿用命令行的坐标系识别、范围裁剪、分块和重试逻辑。
 
 - 经度和纬度使用四个独立输入框：南、西、北、东，不需要记忆空格或参数顺序。
-- 快照可选择“最新数据”、常用相对日期，或通过年、月、日、时、分、秒组合框指定任意 UTC 时刻；每个值既可从列表选择，也可直接输入，日期会自动适配月份与闰年。
+- 快照可选择“最新数据”、常用相对日期，或输入任意 UTC 时刻。点击“选择日期”可从月历中选择日期；`«` 和 `»` 用于切换年份，`‹` 和 `›` 用于切换月份；时间按 `HH:MM:SS` 输入。
+- 网格大小以度为单位；界面会依据范围中心纬度实时显示对应的南北、东西米制尺寸估算值。经度方向的实际距离会随纬度变化。
 - 下载任务在后台执行，窗口保持可操作；完成或失败后可在运行日志中查看结果。
 
 > [!NOTE]
@@ -118,6 +121,10 @@ python download_buildings.py \
 
 数据来自 OpenStreetMap contributors，经 Overpass API 获取，遵循 [ODbL 1.0](https://opendatacommons.org/licenses/odbl/)。每个输出 GeoJSON 均写入数据来源、许可、查询范围与时间戳。
 
+## 代码许可
+
+本项目源代码采用 [MIT License](LICENSE) 发布。请注意，代码许可不改变所下载 OpenStreetMap 数据的署名和 ODbL 义务。
+
 ## 开源贡献
 
 欢迎提交 issue 和 pull request。提交前请使用项目环境运行：
@@ -127,3 +134,5 @@ python -m unittest -v
 ```
 
 请勿提交下载得到的大型数据文件；`data/` 已被 Git 忽略。使用 OSM 数据时，请保留相应的 OpenStreetMap 署名与 ODbL 许可信息。
+
+详细流程请参阅 [贡献指南](CONTRIBUTING.md)，安全问题请参阅[安全策略](SECURITY.md)。

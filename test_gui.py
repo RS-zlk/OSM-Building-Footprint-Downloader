@@ -2,7 +2,7 @@ import sys
 import unittest
 from datetime import date
 
-from gui import DOWNLOADER, available_days, build_command, output_extension, snapshot_to_iso
+from gui import DOWNLOADER, available_days, build_command, output_extension, snapshot_text_to_iso, snapshot_to_iso, tile_size_to_meters, validate_download_inputs
 
 
 class GuiCommandTests(unittest.TestCase):
@@ -19,6 +19,11 @@ class GuiCommandTests(unittest.TestCase):
     def test_structured_snapshot_is_utc(self):
         self.assertEqual(snapshot_to_iso(date(2024, 2, 29), "12", "34", "56"), "2024-02-29T12:34:56Z")
 
+    def test_date_picker_values_are_converted_to_utc(self):
+        self.assertEqual(snapshot_text_to_iso("2024-02-29", "12:34:56"), "2024-02-29T12:34:56Z")
+        with self.assertRaisesRegex(ValueError, "YYYY-MM-DD"):
+            snapshot_text_to_iso("2024/02/29", "12:34:56")
+
     def test_day_choices_follow_selected_month(self):
         self.assertEqual(available_days("2024", "02")[-1], "29")
         self.assertEqual(available_days("2025", "02")[-1], "28")
@@ -26,6 +31,21 @@ class GuiCommandTests(unittest.TestCase):
     def test_output_format_selects_expected_extension(self):
         self.assertEqual(output_extension("GeoJSON (.geojson)"), ".geojson")
         self.assertEqual(output_extension("Shapefile (.shp)"), ".shp")
+
+    def test_tile_size_is_converted_to_metres_at_selected_latitude(self):
+        north_south, east_west = tile_size_to_meters("0.05", 30.75)
+        self.assertAlmostEqual(north_south, 5543, delta=20)
+        self.assertAlmostEqual(east_west, 4786, delta=20)
+
+    def test_invalid_bbox_is_rejected_before_starting_download(self):
+        with self.assertRaisesRegex(ValueError, "南 < 北"):
+            validate_download_inputs("bbox", ["31", "120", "30", "121"], "", "data/out.geojson", "0.05", "2")
+
+    def test_invalid_advanced_options_are_rejected_before_starting_download(self):
+        with self.assertRaisesRegex(ValueError, "不能小于 0"):
+            validate_download_inputs("bbox", ["30", "120", "31", "121"], "", "data/out.geojson", "-0.05", "2")
+        with self.assertRaisesRegex(ValueError, "不能小于 0"):
+            validate_download_inputs("bbox", ["30", "120", "31", "121"], "", "data/out.geojson", "0.05", "-1")
 
 
 if __name__ == "__main__":

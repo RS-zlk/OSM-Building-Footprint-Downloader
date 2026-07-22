@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import queue
+import math
 import subprocess
 import sys
 import threading
@@ -40,12 +41,70 @@ def snapshot_to_iso(day: date, hour: str, minute: str, second: str) -> str:
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def snapshot_text_to_iso(date_text: str, time_text: str) -> str:
+    """Convert the date-picker values into the UTC format accepted by Overpass."""
+    try:
+        selected_date = datetime.strptime(date_text.strip(), "%Y-%m-%d").date()
+        hour, minute, second = time_text.strip().split(":")
+    except ValueError as error:
+        raise ValueError("请按 YYYY-MM-DD 和 HH:MM:SS 格式填写历史快照。") from error
+    return snapshot_to_iso(selected_date, hour, minute, second)
+
+
 def available_days(year: str, month: str) -> list[str]:
     return [f"{value:02d}" for value in range(1, monthrange(int(year), int(month))[1] + 1)]
 
 
 def output_extension(output_format: str) -> str:
     return ".shp" if output_format == "Shapefile (.shp)" else ".geojson"
+
+
+def tile_size_to_meters(tile_size: str, latitude: float) -> tuple[float, float]:
+    """Estimate a degree-square tile's north/south and east/west size in metres."""
+    try:
+        degrees = float(tile_size)
+    except ValueError as error:
+        raise ValueError("网格大小必须是数字。") from error
+    if degrees < 0:
+        raise ValueError("网格大小不能小于 0。")
+    latitude_radians = math.radians(latitude)
+    metres_per_degree_latitude = 111132.92 - 559.82 * math.cos(2 * latitude_radians) + 1.175 * math.cos(4 * latitude_radians)
+    metres_per_degree_longitude = 111412.84 * math.cos(latitude_radians) - 93.5 * math.cos(3 * latitude_radians)
+    return degrees * metres_per_degree_latitude, degrees * metres_per_degree_longitude
+
+
+def validate_download_inputs(source_mode: str, bbox: Sequence[str] | str, shp_path: str, output_path: str, tile_size: str, retries: str) -> None:
+    """Validate GUI values early so users do not wait for a failed subprocess."""
+    if source_mode == "bbox":
+        values = bbox.replace(",", " ").split() if isinstance(bbox, str) else [value.strip() for value in bbox]
+        if len(values) != 4 or not all(values):
+            raise ValueError("请完整填写南、西、北、东四个范围值。")
+        try:
+            south, west, north, east = (float(value) for value in values)
+        except (TypeError, ValueError) as error:
+            raise ValueError("范围坐标必须是有效数字。") from error
+        if not (-90 <= south < north <= 90 and -180 <= west < east <= 180):
+            raise ValueError("范围无效：需满足南 < 北、 西 < 东；纬度范围为 -90 到 90，经度范围为 -180 到 180。")
+    else:
+        path = Path(shp_path.strip())
+        if not path.is_file():
+            raise ValueError("请选择存在的研究区 SHP 文件。")
+        if path.suffix.lower() != ".shp":
+            raise ValueError("研究区文件必须是 .shp 格式。")
+
+    destination = Path(output_path.strip())
+    destination_parent = destination.parent if destination.is_absolute() else PROJECT_DIR / destination.parent
+    if not output_path.strip() or not destination_parent.is_dir():
+        raise ValueError("请选择一个已存在文件夹内的输出位置。")
+    try:
+        tile = float(tile_size)
+        retry_count = int(retries)
+    except ValueError as error:
+        raise ValueError("网格大小必须是数字，重试次数必须是整数。") from error
+    if tile < 0:
+        raise ValueError("网格大小不能小于 0（0 表示不分块）。")
+    if retry_count < 0:
+        raise ValueError("重试次数不能小于 0。")
 
 
 def build_command(source_mode: str, bbox: Sequence[str] | str, shp_path: str, output_path: str, snapshot_date: str, tile_size: str, retries: str) -> list[str]:
@@ -80,26 +139,28 @@ class DownloaderApp(ctk.CTkFrame):
         self.source_mode = tk.StringVar(value="bbox")
         self.coordinates = {name: tk.StringVar(value=value) for name, value in (("南", "30.742"), ("西", "120.480"), ("北", "30.750"), ("东", "120.490"))}
         self.shp_path = tk.StringVar()
-        self.output_path = tk.StringVar(value=str(PROJECT_DIR / "data" / "buildings.geojson"))
+        self.output_path = tk.StringVar(value="data/buildings.geojson")
         self.output_format = tk.StringVar(value=OUTPUT_FORMATS[0])
         self.snapshot_preset = tk.StringVar(value="最新数据")
-        self.snapshot_year = tk.StringVar(value=str(now.year))
-        self.snapshot_month = tk.StringVar(value=f"{now.month:02d}")
-        self.snapshot_day = tk.StringVar(value=f"{now.day:02d}")
-        self.snapshot_hour = tk.StringVar(value="00")
-        self.snapshot_minute = tk.StringVar(value="00")
-        self.snapshot_second = tk.StringVar(value="00")
+        self.snapshot_date_text = tk.StringVar(value=now.strftime("%Y-%m-%d"))
+        self.snapshot_time_text = tk.StringVar(value="00:00:00")
+        self.calendar_month = date(now.year, now.month, 1)
         self.tile_size = tk.StringVar(value="0.05")
         self.retries = tk.StringVar(value="2")
         self.events: queue.Queue[tuple[str, str | int]] = queue.Queue()
         self.running = False
-        self.snapshot_year.trace_add("write", self._update_days)
-        self.snapshot_month.trace_add("write", self._update_days)
+        self.cancel_requested = False
+        self.process: subprocess.Popen[str] | None = None
+        self.tile_size.trace_add("write", self._update_tile_meter_hint)
+        self.coordinates["南"].trace_add("write", self._update_tile_meter_hint)
+        self.coordinates["北"].trace_add("write", self._update_tile_meter_hint)
         self._build()
+        self._update_source_state()
+        self._update_tile_meter_hint()
         self.after(100, self._handle_events)
 
     def _build(self) -> None:
-        self.master.title("OSM 建筑矢量下载器")
+        self.master.title("OSM 建筑轮廓下载器")
         self.master.minsize(980, 720)
         self.master.configure(fg_color=WHITE)
         self.grid(sticky="nsew")
@@ -110,7 +171,7 @@ class DownloaderApp(ctk.CTkFrame):
 
         header = ctk.CTkFrame(self, fg_color=WHITE)
         header.grid(row=0, column=0, sticky="ew", padx=34, pady=(28, 18))
-        ctk.CTkLabel(header, text="OSM 建筑矢量下载器", text_color=BLACK, font=ctk.CTkFont(size=25, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(header, text="OSM 建筑轮廓下载器", text_color=BLACK, font=ctk.CTkFont(size=25, weight="bold")).pack(anchor="w")
         ctk.CTkLabel(header, text="选择范围、快照时间和输出格式，获取可直接用于 GIS 的建筑数据。", text_color=MUTED, font=ctk.CTkFont(size=13)).pack(anchor="w", pady=(4, 0))
 
         body = ctk.CTkFrame(self, fg_color=WHITE)
@@ -166,17 +227,19 @@ class DownloaderApp(ctk.CTkFrame):
         preset.pack(anchor="w", padx=18, pady=(0, 12))
         date_frame = ctk.CTkFrame(snapshot, fg_color="transparent")
         date_frame.pack(fill="x", padx=18, pady=(0, 18))
-        self.date_time_boxes: list[ctk.CTkComboBox] = []
-        current_year = datetime.now(timezone.utc).year
-        controls = (("年", self.snapshot_year, [str(value) for value in range(current_year, 2003, -1)]), ("月", self.snapshot_month, [f"{value:02d}" for value in range(1, 13)]), ("日", self.snapshot_day, [f"{value:02d}" for value in range(1, 32)]), ("时", self.snapshot_hour, [f"{value:02d}" for value in range(24)]), ("分", self.snapshot_minute, [f"{value:02d}" for value in range(60)]), ("秒", self.snapshot_second, [f"{value:02d}" for value in range(60)]))
-        for index, (label, variable, values) in enumerate(controls):
-            field = ctk.CTkFrame(date_frame, fg_color="transparent")
-            field.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 6, 0))
-            ctk.CTkLabel(field, text=label, text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(0, 4))
-            menu_width = 112 if label == "年" else 78
-            menu = ctk.CTkComboBox(field, variable=variable, values=values, fg_color=WHITE, border_color=BORDER, button_color=CONTROL_HOVER, button_hover_color="#CFCFCF", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=34, width=menu_width)
-            menu.pack(fill="x")
-            self.date_time_boxes.append(menu)
+        date_frame.columnconfigure(0, weight=3)
+        date_frame.columnconfigure(1, weight=2)
+        ctk.CTkLabel(date_frame, text="日期", text_color=MUTED, font=ctk.CTkFont(size=12)).grid(row=0, column=0, sticky="w", pady=(0, 4))
+        ctk.CTkLabel(date_frame, text="时间（UTC）", text_color=MUTED, font=ctk.CTkFont(size=12)).grid(row=0, column=1, sticky="w", padx=(10, 0), pady=(0, 4))
+        date_control = ctk.CTkFrame(date_frame, fg_color="transparent")
+        date_control.grid(row=1, column=0, sticky="ew")
+        date_control.columnconfigure(0, weight=1)
+        self.snapshot_date_entry = ctk.CTkEntry(date_control, textvariable=self.snapshot_date_text, placeholder_text="YYYY-MM-DD", fg_color=WHITE, border_color=BORDER, text_color=BLACK, height=34)
+        self.snapshot_date_entry.grid(row=0, column=0, sticky="ew")
+        self.calendar_button = ctk.CTkButton(date_control, text="选择日期", width=86, height=34, fg_color=WHITE, border_width=1, border_color=BLACK, text_color=BLACK, hover_color="#EDEDED", command=self._open_date_picker)
+        self.calendar_button.grid(row=0, column=1, padx=(6, 0))
+        self.snapshot_time_entry = ctk.CTkEntry(date_frame, textvariable=self.snapshot_time_text, placeholder_text="HH:MM:SS", fg_color=WHITE, border_color=BORDER, text_color=BLACK, height=34)
+        self.snapshot_time_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0))
         self._update_snapshot_state()
 
     def _build_export_panel(self, parent: ctk.CTkFrame) -> None:
@@ -187,23 +250,45 @@ class DownloaderApp(ctk.CTkFrame):
         format_menu = ctk.CTkOptionMenu(panel, variable=self.output_format, values=list(OUTPUT_FORMATS), command=self._change_output_format, fg_color=CONTROL, button_color=CONTROL_HOVER, button_hover_color="#CFCFCF", text_color=BLACK, dropdown_fg_color=WHITE, dropdown_text_color=BLACK, height=36)
         format_menu.pack(fill="x", padx=18, pady=(0, 14))
         ctk.CTkLabel(panel, text="输出位置", text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", padx=18, pady=(0, 4))
-        self.output_entry = ctk.CTkEntry(panel, textvariable=self.output_path, fg_color=WHITE, border_color=BORDER, text_color=BLACK, height=36)
+        self.output_entry = ctk.CTkEntry(panel, textvariable=self.output_path, fg_color=WHITE, border_color=BORDER, text_color=BLACK, height=36, font=ctk.CTkFont(size=11))
         self.output_entry.pack(fill="x", padx=18)
-        self.output_scrollbar = ctk.CTkScrollbar(panel, orientation="horizontal", command=self.output_entry._entry.xview, fg_color=PANEL, button_color=CONTROL_HOVER, button_hover_color="#CFCFCF", height=10)
-        self.output_entry._entry.configure(xscrollcommand=self.output_scrollbar.set)
-        self.output_scrollbar.pack(fill="x", padx=20, pady=(4, 0))
+        self.output_entry._entry.configure(justify="left")
+        self.output_path.trace_add("write", self._show_output_path_from_start)
         ctk.CTkButton(panel, text="选择保存位置", height=34, fg_color=WHITE, border_width=1, border_color=BLACK, text_color=BLACK, hover_color="#EDEDED", command=self._choose_output).pack(fill="x", padx=18, pady=(8, 16))
         ctk.CTkLabel(panel, text="高级选项", text_color=BLACK, font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=18, pady=(2, 9))
         self._labeled_entry(panel, "网格大小（度）", self.tile_size, "0 表示不分块")
+        self.tile_meter_label = ctk.CTkLabel(panel, text="", text_color=MUTED, font=ctk.CTkFont(size=11), justify="left", wraplength=230)
+        self.tile_meter_label.pack(anchor="w", padx=18, pady=(0, 10))
         self._labeled_entry(panel, "每端点重试次数", self.retries, "默认 2")
         self.download_button = ctk.CTkButton(panel, text="开始下载", height=42, fg_color=BLACK, hover_color="#333333", text_color=WHITE, font=ctk.CTkFont(size=14, weight="bold"), command=self._start_download)
         self.download_button.pack(fill="x", padx=18, pady=(22, 8))
+        self.cancel_button = ctk.CTkButton(panel, text="取消下载", height=34, fg_color=WHITE, border_width=1, border_color=BLACK, text_color=BLACK, hover_color="#EDEDED", state="disabled", command=self._cancel_download)
+        self.cancel_button.pack(fill="x", padx=18, pady=(0, 8))
         self.progress = ctk.CTkProgressBar(panel, mode="indeterminate", progress_color=BLACK, fg_color="#E5E5E5")
         self.progress.pack(fill="x", padx=18, pady=(0, 18))
+        self.status_label = ctk.CTkLabel(panel, text="就绪", text_color=MUTED, font=ctk.CTkFont(size=12))
+        self.status_label.pack(anchor="w", padx=18, pady=(0, 14))
 
     def _labeled_entry(self, parent: ctk.CTkFrame, label: str, variable: tk.StringVar, hint: str) -> None:
         ctk.CTkLabel(parent, text=label, text_color=MUTED, font=ctk.CTkFont(size=12)).pack(anchor="w", padx=18, pady=(0, 4))
         ctk.CTkEntry(parent, textvariable=variable, placeholder_text=hint, fg_color=WHITE, border_color=BORDER, text_color=BLACK, height=34).pack(fill="x", padx=18, pady=(0, 10))
+
+    def _update_tile_meter_hint(self, *_args: object) -> None:
+        """Show the user what a degree-based tile means at the selected latitude."""
+        if not hasattr(self, "tile_meter_label"):
+            return
+        try:
+            south, north = float(self.coordinates["南"].get()), float(self.coordinates["北"].get())
+            if not -90 <= south <= 90 or not -90 <= north <= 90:
+                raise ValueError
+            north_south, east_west = tile_size_to_meters(self.tile_size.get(), (south + north) / 2)
+            if north_south == 0:
+                text = "0 表示不分块。"
+            else:
+                text = f"约 {north_south:,.0f} 米（南北）× {east_west:,.0f} 米（东西）\n按范围中心纬度估算"
+        except ValueError:
+            text = "请输入有效范围和网格大小以换算米。"
+        self.tile_meter_label.configure(text=text)
 
     def _build_log(self) -> None:
         log_card = self._card(self)
@@ -226,34 +311,77 @@ class DownloaderApp(ctk.CTkFrame):
         offsets = {"1 天前": 1, "7 天前": 7, "30 天前": 30, "90 天前": 90, "1 年前": 365}
         if preset in offsets:
             target = datetime.now(timezone.utc).date() - timedelta(days=offsets[preset])
-            self.snapshot_year.set(str(target.year))
-            self.snapshot_month.set(f"{target.month:02d}")
-            self.snapshot_day.set(f"{target.day:02d}")
-            self.snapshot_hour.set("00")
-            self.snapshot_minute.set("00")
-            self.snapshot_second.set("00")
+            self.snapshot_date_text.set(target.strftime("%Y-%m-%d"))
+            self.snapshot_time_text.set("00:00:00")
         self._update_snapshot_state()
 
-    def _update_days(self, *_args: object) -> None:
+    def _open_date_picker(self) -> None:
         try:
-            values = available_days(self.snapshot_year.get(), self.snapshot_month.get())
+            selected = datetime.strptime(self.snapshot_date_text.get(), "%Y-%m-%d").date()
         except ValueError:
-            return
-        if hasattr(self, "date_time_boxes"):
-            self.date_time_boxes[2].configure(values=values)
-        if self.snapshot_day.get() not in values:
-            self.snapshot_day.set(values[-1])
+            selected = datetime.now(timezone.utc).date()
+        self.calendar_month = date(selected.year, selected.month, 1)
+        dialog = ctk.CTkToplevel(self.master)
+        dialog.title("选择日期")
+        dialog.geometry("330x330")
+        dialog.resizable(False, False)
+        dialog.transient(self.master)
+        dialog.grab_set()
+        self._render_calendar(dialog)
+
+    def _render_calendar(self, dialog: ctk.CTkToplevel) -> None:
+        for child in dialog.winfo_children():
+            child.destroy()
+        header = ctk.CTkFrame(dialog, fg_color="transparent")
+        header.pack(fill="x", padx=16, pady=(16, 10))
+        ctk.CTkButton(header, text="«", width=34, height=30, fg_color=WHITE, border_width=1, border_color=BORDER, text_color=BLACK, command=lambda: self._move_calendar_year(dialog, -1)).pack(side="left")
+        ctk.CTkButton(header, text="‹", width=34, height=30, fg_color=WHITE, border_width=1, border_color=BORDER, text_color=BLACK, command=lambda: self._move_calendar_month(dialog, -1)).pack(side="left", padx=(4, 0))
+        ctk.CTkLabel(header, text=self.calendar_month.strftime("%Y 年 %m 月"), text_color=BLACK, font=ctk.CTkFont(size=15, weight="bold")).pack(side="left", expand=True)
+        ctk.CTkButton(header, text="›", width=34, height=30, fg_color=WHITE, border_width=1, border_color=BORDER, text_color=BLACK, command=lambda: self._move_calendar_month(dialog, 1)).pack(side="right")
+        ctk.CTkButton(header, text="»", width=34, height=30, fg_color=WHITE, border_width=1, border_color=BORDER, text_color=BLACK, command=lambda: self._move_calendar_year(dialog, 1)).pack(side="right", padx=(0, 4))
+        calendar = ctk.CTkFrame(dialog, fg_color="transparent")
+        calendar.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        for column, weekday in enumerate(("一", "二", "三", "四", "五", "六", "日")):
+            calendar.columnconfigure(column, weight=1)
+            ctk.CTkLabel(calendar, text=weekday, text_color=MUTED, font=ctk.CTkFont(size=12)).grid(row=0, column=column, pady=(0, 4))
+        first_weekday, days = monthrange(self.calendar_month.year, self.calendar_month.month)
+        for day_number in range(1, days + 1):
+            row, column = divmod(first_weekday + day_number - 1, 7)
+            selected = self.snapshot_date_text.get() == f"{self.calendar_month.year:04d}-{self.calendar_month.month:02d}-{day_number:02d}"
+            ctk.CTkButton(calendar, text=str(day_number), width=34, height=28, corner_radius=6, fg_color=BLACK if selected else WHITE, border_width=0 if selected else 1, border_color=BORDER, text_color=WHITE if selected else BLACK, hover_color="#333333" if selected else "#EDEDED", command=lambda value=day_number: self._select_calendar_date(dialog, value)).grid(row=row + 1, column=column, padx=2, pady=2)
+
+    def _move_calendar_month(self, dialog: ctk.CTkToplevel, offset: int) -> None:
+        year, month = self.calendar_month.year, self.calendar_month.month + offset
+        if month == 0:
+            year, month = year - 1, 12
+        elif month == 13:
+            year, month = year + 1, 1
+        self.calendar_month = date(year, month, 1)
+        self._render_calendar(dialog)
+
+    def _move_calendar_year(self, dialog: ctk.CTkToplevel, offset: int) -> None:
+        self.calendar_month = date(self.calendar_month.year + offset, self.calendar_month.month, 1)
+        self._render_calendar(dialog)
+
+    def _select_calendar_date(self, dialog: ctk.CTkToplevel, day_number: int) -> None:
+        self.snapshot_date_text.set(f"{self.calendar_month.year:04d}-{self.calendar_month.month:02d}-{day_number:02d}")
+        dialog.destroy()
 
     def _update_snapshot_state(self) -> None:
         state = "disabled" if self.snapshot_preset.get() == "最新数据" else "normal"
-        for menu in self.date_time_boxes:
-            menu.configure(state=state)
+        self.snapshot_date_entry.configure(state=state)
+        self.snapshot_time_entry.configure(state=state)
+        self.calendar_button.configure(state=state)
 
     def _snapshot_value(self) -> str:
         if self.snapshot_preset.get() == "最新数据":
             return ""
-        selected_date = date(int(self.snapshot_year.get()), int(self.snapshot_month.get()), int(self.snapshot_day.get()))
-        return snapshot_to_iso(selected_date, self.snapshot_hour.get(), self.snapshot_minute.get(), self.snapshot_second.get())
+        return snapshot_text_to_iso(self.snapshot_date_text.get(), self.snapshot_time_text.get())
+
+    def _show_output_path_from_start(self, *_args: object) -> None:
+        """Keep the filename field left-aligned after selecting a new location."""
+        if hasattr(self, "output_entry"):
+            self.after_idle(lambda: self.output_entry._entry.xview_moveto(0))
 
     def _change_output_format(self, output_format: str) -> None:
         path = Path(self.output_path.get() or "buildings.geojson")
@@ -281,21 +409,38 @@ class DownloaderApp(ctk.CTkFrame):
         if self.running:
             return
         try:
+            validate_download_inputs(self.source_mode.get(), [self.coordinates[name].get() for name in ("南", "西", "北", "东")], self.shp_path.get(), self.output_path.get(), self.tile_size.get(), self.retries.get())
             command = build_command(self.source_mode.get(), [self.coordinates[name].get() for name in ("南", "西", "北", "东")], self.shp_path.get(), self.output_path.get(), self._snapshot_value(), self.tile_size.get(), self.retries.get())
         except ValueError as error:
             messagebox.showerror("无法开始下载", str(error), parent=self.master)
             return
         self.running = True
+        self.cancel_requested = False
         self.download_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
+        self.status_label.configure(text="正在下载…")
         self.progress.start()
-        self._write_log("开始下载…")
+        self._write_log("开始下载…下载期间可点击“取消下载”。")
         threading.Thread(target=self._run_download, args=(command,), daemon=True).start()
+
+    def _cancel_download(self) -> None:
+        if not self.running:
+            return
+        self.cancel_requested = True
+        self.cancel_button.configure(state="disabled")
+        self.status_label.configure(text="正在取消…")
+        self._write_log("正在请求取消下载…")
+        if self.process is not None:
+            self.process.terminate()
 
     def _run_download(self, command: Sequence[str]) -> None:
         try:
-            completed = subprocess.run(command, cwd=PROJECT_DIR, text=True, capture_output=True, check=False)
-            self.events.put(("log", (completed.stdout + completed.stderr).strip() or "下载程序未输出日志。"))
-            self.events.put(("finished", completed.returncode))
+            self.process = subprocess.Popen(command, cwd=PROJECT_DIR, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            if self.cancel_requested:
+                self.process.terminate()
+            output, _ = self.process.communicate()
+            self.events.put(("log", output.strip() or "下载程序未输出日志。"))
+            self.events.put(("finished", self.process.returncode or 0))
         except OSError as error:
             self.events.put(("log", f"无法启动下载程序：{error}"))
             self.events.put(("finished", 1))
@@ -308,11 +453,18 @@ class DownloaderApp(ctk.CTkFrame):
                     self._write_log(str(payload))
                 elif event == "finished":
                     self.running = False
+                    self.process = None
                     self.download_button.configure(state="normal")
+                    self.cancel_button.configure(state="disabled")
                     self.progress.stop()
-                    if payload == 0:
+                    if self.cancel_requested:
+                        self.status_label.configure(text="已取消")
+                        self._write_log("下载已取消。")
+                    elif payload == 0:
+                        self.status_label.configure(text="下载完成")
                         messagebox.showinfo("下载完成", f"建筑数据已保存至：\n{self.output_path.get()}", parent=self.master)
                     else:
+                        self.status_label.configure(text="下载失败")
                         messagebox.showerror("下载失败", "请查看运行日志，并检查网络、范围和参数。", parent=self.master)
         except queue.Empty:
             pass
