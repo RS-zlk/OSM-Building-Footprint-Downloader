@@ -1,0 +1,5 @@
+name: osm-buildings
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
