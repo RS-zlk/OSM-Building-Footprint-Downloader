@@ -33,7 +33,7 @@ jobs:
         run: python -m ruff check .
       - name: Type check with mypy
         shell: bash -l {0}
-        run: python -m mypy download_buildings.py gui.py
+        run: python -m mypy download_buildings.py gui.py tiffgetter_adapter.py
       - name: Run test suite
         shell: bash -l {0}
         run: python -m unittest -v

@@ -144,6 +144,64 @@ python download_buildings.py \
   --output data/buildings.geojson
 ```
 
+## 与 TiffGetter 集成
+
+`tiffgetter_adapter.py` 是面向 TiffGetter 的独立契约适配器：它以请求 JSON 为输入，输出结果 JSON 与可选的 NDJSON 事件流。适配器只在当前进程内调用本仓库的下载逻辑，不依赖 TiffGetter 代码，也不改动 TiffGetter 项目的任何文件。
+
+运行命令：
+
+```powershell
+python tiffgetter_adapter.py --request req.json --result result.json --events events.ndjson
+```
+
+请求示例（`options` 与 `output` 之外的字段缺省时使用内置默认值）：
+
+```json
+{
+  "schema_version": "1.0",
+  "request_id": "demo-1",
+  "aoi": {"mode": "bbox", "bbox": [30.742, 120.480, 30.750, 120.490]},
+  "options": {"date": null, "endpoints": [], "timeout": 120, "retries": 2, "deadline": 0, "tile_size": 0.05, "max_tiles": 2000, "jobs": 1, "cache_dir": null, "refresh_cache": false, "building_values": []},
+  "output": {"root": "data/output/buildings", "formats": ["geojson"]}
+}
+```
+
+`aoi` 也可使用 SHP 研究区：`{"mode": "shp", "path": "data/study_area.shp", "crs": null}`。`output.formats` 可取 `geojson`、`shp`、`gpkg`，每种格式写出 `root/buildings.<ext>`，并始终写出 `root/buildings.metadata.json`。
+
+结果示例：
+
+```json
+{
+  "schema_version": "1.0",
+  "request_id": "demo-1",
+  "status": "success",
+  "exit_code": 0,
+  "started_at": "2026-01-01T00:00:00+00:00",
+  "finished_at": "2026-01-01T00:00:12+00:00",
+  "items": [
+    {
+      "aoi_id": "demo-1",
+      "status": "success",
+      "assets": {"geojson": "data/output/buildings/buildings.geojson", "shp": null, "gpkg": null, "metadata": "data/output/buildings/buildings.metadata.json"},
+      "bounds": {"min_lon": 120.48, "min_lat": 30.742, "max_lon": 120.49, "max_lat": 30.75},
+      "feature_count": 128,
+      "diagnostics": {"invalid_geometry": 0, "incomplete_relation": 0, "non_polygon": 0, "duplicate_member_way": 0, "unsupported_element": 0, "filtered_elements": 0},
+      "detail": null
+    }
+  ],
+  "diagnostics": {"invalid_geometry": 0, "incomplete_relation": 0, "non_polygon": 0, "duplicate_member_way": 0, "unsupported_element": 0, "filtered_elements": 0},
+  "detail": null
+}
+```
+
+退出码：
+
+- `0`：成功，数据与结果文件均已写出。
+- `2`：请求本身不合法（schema、aoi、output、options 校验失败），或请求文件无法读取/解析；仍会写出失败结果 JSON。
+- `4`：执行下载或写出数据/结果文件失败；失败结果中 `detail` 为异常文本。
+
+`--events` 指定的 NDJSON 文件按行记录 `log`、`progress` 与 `run_summary` 事件，每条事件包含 `type`、`schema_version`、`job_id`、`sequence`、`timestamp` 与 `item`。
+
 ## 图形界面
 
 不熟悉命令行时，可在项目 Conda 环境中启动桌面界面：

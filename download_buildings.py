@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -224,12 +224,14 @@ def write_cached_response(cache_dir: Path, key: str, response: dict[str, Any]) -
     os.replace(temporary, cache_dir / f"{key}.json")
 
 
-def collect_tile_responses(endpoints: Iterable[str], tiles: list[list[float]], timeout: int, retries: int, snapshot_date: str | None, deadline: float | None, jobs: int, cache_dir: Path | None, refresh_cache: bool, show_progress: bool) -> list[dict[str, Any]]:
+def collect_tile_responses(endpoints: Iterable[str], tiles: list[list[float]], timeout: int, retries: int, snapshot_date: str | None, deadline: float | None, jobs: int, cache_dir: Path | None, refresh_cache: bool, show_progress: bool, on_progress: Callable[[str], None] | None = None) -> list[dict[str, Any]]:
     """按分块收集 Overpass 响应，支持缓存命中与并行执行。"""
     def process(item: tuple[int, list[float]]) -> dict[str, Any]:
         """处理单个分块：输出进度、读取缓存、必要时请求并写回缓存。"""
         index, tile = item
-        if show_progress:
+        if on_progress is not None:
+            on_progress(tile_progress_line(index, len(tiles), tile))
+        elif show_progress:
             print(tile_progress_line(index, len(tiles), tile), flush=True)
         if cache_dir is not None:
             key = cache_key(tile, snapshot_date)
@@ -247,6 +249,16 @@ def collect_tile_responses(endpoints: Iterable[str], tiles: list[list[float]], t
         return [process(item) for item in items]
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as executor:
         return list(executor.map(process, items))
+
+
+def fetch_and_convert(*, bbox: list[float], snapshot_date: str | None, clip_geometry: Any | None, endpoints: Iterable[str], timeout: int, retries: int, deadline: float | None, tile_size: float, max_tiles: int, jobs: int, cache_dir: Path | None, refresh_cache: bool, building_values: set[str] | None, show_progress: bool, on_progress: Callable[[str], None] | None = None) -> tuple[dict[str, Any], list[list[float]], list[dict[str, Any]]]:
+    """分块查询并转换为 GeoJSON，同时返回分块范围与原始响应，供命令行与适配器复用。"""
+    tiles = split_bbox(bbox, tile_size, max_tiles)
+    raw_responses = collect_tile_responses(endpoints, tiles, timeout, retries, snapshot_date, deadline, jobs, cache_dir, refresh_cache, show_progress, on_progress)
+    elements = [element for response in raw_responses for element in response.get("elements", [])]
+    data = convert_to_geojson(elements, bbox, snapshot_date, clip_geometry, building_values=building_values)
+    data["metadata"]["query_tiles"] = len(tiles)
+    return data, tiles, raw_responses
 
 
 def polygon_from_ring(coordinates: list[dict[str, float]]) -> Polygon | None:
@@ -468,18 +480,30 @@ def main() -> int:
         building_values = {value.strip() for value in args.building_values.split(",") if value.strip()} if args.building_values else None
         snapshot_date = parse_snapshot_date(args.date)
         deadline = time.monotonic() + args.deadline if args.deadline > 0 else None
-        tiles = split_bbox(bbox, args.tile_size, args.max_tiles)
         endpoints = tuple(args.endpoint) if args.endpoint else DEFAULT_ENDPOINTS
-        raw_responses = collect_tile_responses(endpoints, tiles, args.timeout, args.retries, snapshot_date, deadline, args.jobs, args.cache_dir, args.refresh_cache, len(tiles) > 1)
+        show_progress = len(split_bbox(bbox, args.tile_size, args.max_tiles)) > 1
+        geojson, tiles, raw_responses = fetch_and_convert(
+            bbox=bbox,
+            snapshot_date=snapshot_date,
+            clip_geometry=clip_geometry,
+            endpoints=endpoints,
+            timeout=args.timeout,
+            retries=args.retries,
+            deadline=deadline,
+            tile_size=args.tile_size,
+            max_tiles=args.max_tiles,
+            jobs=args.jobs,
+            cache_dir=args.cache_dir,
+            refresh_cache=args.refresh_cache,
+            building_values=building_values,
+            show_progress=show_progress,
+        )
     except (ValueError, RuntimeError, HTTPError, URLError, TimeoutError) as error:
         print(f"Download failed: {error}", file=sys.stderr)
         return 1
-    elements = [element for response in raw_responses for element in response.get("elements", [])]
     if args.save_raw:
         args.save_raw.parent.mkdir(parents=True, exist_ok=True)
         args.save_raw.write_text(json.dumps({"responses": raw_responses}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    geojson = convert_to_geojson(elements, bbox, snapshot_date, clip_geometry, building_values=building_values)
-    geojson["metadata"]["query_tiles"] = len(tiles)
     try:
         output_format = write_output(args.output, geojson)
     except (OSError, ValueError, shapefile.ShapefileException) as error:

@@ -17,4 +17,5 @@
 - 新增 `--jobs` 并行分块查询，输出顺序与分块顺序一致。
 - 新增 `pyproject.toml` 打包配置与 `osm-buildings`、`osm-buildings-gui` 两个命令行入口。
 - 新增 PyInstaller 配置，可构建 `osm-buildings-cli.exe` 与 `osm-buildings-gui.exe`。
+- 新增 TiffGetter 独立契约适配器 `tiffgetter_adapter.py`，以请求/结果 JSON 与 NDJSON 事件对接外部流程。
 - CI 覆盖 Ubuntu 与 Windows，执行 ruff、mypy、unittest，并在 Windows 构建并上传 exe。

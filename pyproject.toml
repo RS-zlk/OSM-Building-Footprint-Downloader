@@ -25,7 +25,7 @@ osm-buildings = "download_buildings:main"
 osm-buildings-gui = "gui:main"
 
 [tool.setuptools]
-py-modules = ["download_buildings", "gui"]
+py-modules = ["download_buildings", "gui", "tiffgetter_adapter"]
 
 [tool.ruff]
 target-version = "py310"
