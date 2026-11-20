@@ -26,7 +26,10 @@ git rebase upstream/main
 - 处理普通建筑 way 和 multipolygon relation，保留孔洞。
 - 为大范围自动分块，支持重试与 Overpass 端点故障切换。
 - 提供命令行与桌面 GUI 两种工作方式。
-- 可输出 GeoJSON 或 Shapefile（含 WGS84 `.prj`、UTF-8 `.cpg` 和元数据侧车文件）。
+- 可输出 GeoJSON、Shapefile 或 GeoPackage（含 WGS84 `.prj`、UTF-8 `.cpg` 和元数据侧车文件）。
+- 支持按 `building` 取值过滤建筑类型。
+- 分块响应可写入本地缓存，中断后可断点续跑。
+- 支持并行请求多个分块。
 
 ## 环境
 
@@ -75,6 +78,55 @@ python download_buildings.py \
 
 除 `.shp`、`.shx`、`.dbf` 外，程序还会生成 WGS84 坐标系文件 `.prj`、UTF-8 编码声明 `.cpg`、数据元信息 `.metadata.json` 和属性名映射 `.fields.json`。后两个文件用于保留 Shapefile 的字段名和元数据限制之外的信息；请将这些文件与 `.shp` 一并保存或分发。
 
+### 输出 GeoPackage
+
+将输出文件扩展名设为 `.gpkg` 即可生成 GeoPackage：
+
+```bash
+python download_buildings.py \
+  --bbox 30.742 120.480 30.750 120.490 \
+  --output data/wuzhen_buildings.gpkg
+```
+
+GeoPackage 输出依赖 `fiona`。可安装 `fiona`，或在后续版本提供可选依赖后使用 `pip install -e ".[gpkg]"`。程序会写入名为 `buildings` 的图层，几何统一为 MultiPolygon，并生成与 Shapefile 一致的 `.metadata.json` 侧车文件。
+
+### 按建筑类型过滤
+
+使用 `--building-values` 指定要保留的 `building` 取值（逗号分隔）；留空表示全部：
+
+```bash
+python download_buildings.py \
+  --bbox 30.742 120.480 30.750 120.490 \
+  --building-values yes,house \
+  --output data/wuzhen_buildings.geojson
+```
+
+被过滤的要素数量会记录在输出的 `metadata.diagnostics.filtered_elements` 中。
+
+### 缓存与断点续跑
+
+使用 `--cache-dir` 把每个分块的 Overpass 响应缓存到本地；再次运行相同范围和快照时会直接读取缓存，从而跳过已完成的请求：
+
+```bash
+python download_buildings.py \
+  --bbox 30.742 120.480 30.850 120.600 \
+  --cache-dir data/cache \
+  --output data/buildings.geojson
+```
+
+使用 `--refresh-cache` 可忽略已有缓存并重新请求所有分块。
+
+### 并行分块
+
+使用 `--jobs` 并行请求多个分块，取值 1-8（默认 1）。输出顺序与分块顺序保持一致：
+
+```bash
+python download_buildings.py \
+  --bbox 30.742 120.480 30.850 120.600 \
+  --jobs 4 \
+  --output data/buildings.geojson
+```
+
 ## 图形界面
 
 不熟悉命令行时，可在项目 Conda 环境中启动桌面界面：
@@ -84,7 +136,7 @@ conda activate osm-buildings
 python gui.py
 ```
 
-界面支持输入经纬度范围或选择 SHP 研究区、选择历史快照和输出位置，并会在后台执行下载，显示完成状态与错误日志。通过“保存文件类型”下拉框选择 GeoJSON 或 Shapefile，界面会自动匹配输出文件扩展名；SHP 模式沿用命令行的坐标系识别、范围裁剪、分块和重试逻辑。
+界面支持输入经纬度范围或选择 SHP 研究区、选择历史快照和输出位置，并会在后台执行下载，显示完成状态与错误日志。通过“保存文件类型”下拉框选择 GeoJSON、Shapefile 或 GeoPackage，界面会自动匹配输出文件扩展名；SHP 模式沿用命令行的坐标系识别、范围裁剪、分块和重试逻辑。
 
 - 经度和纬度使用四个独立输入框：南、西、北、东，不需要记忆空格或参数顺序。
 - 快照可选择“最新数据”、常用相对日期，或输入任意 UTC 时刻。点击“选择日期”可从月历中选择日期；`«` 和 `»` 用于切换年份，`‹` 和 `›` 用于切换月份；时间按 `HH:MM:SS` 输入。

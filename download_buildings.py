@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import hashlib
 import json
 import math
 import os
@@ -26,8 +28,13 @@ if _PROJ_DATA.is_dir():
 
 import shapefile
 from pyproj import CRS, Transformer, datadir
-from shapely.geometry import LineString, Polygon, mapping, shape
+from shapely.geometry import LineString, MultiPolygon, Polygon, mapping, shape
 from shapely.ops import polygonize, transform, unary_union
+
+try:
+    import fiona
+except ImportError:
+    fiona = None
 
 DEFAULT_ENDPOINTS = (
     "https://overpass-api.de/api/interpreter",
@@ -46,7 +53,11 @@ def parse_args() -> argparse.Namespace:
     extent = parser.add_mutually_exclusive_group(required=True)
     extent.add_argument("--bbox", nargs=4, type=float, metavar=("SOUTH", "WEST", "NORTH", "EAST"), help="WGS84 extent, ordered south west north east.")
     extent.add_argument("--shp", type=Path, help="Study-area ESRI Shapefile. Its geometry is used to clip results.")
-    parser.add_argument("--output", type=Path, required=True, help="Destination .geojson, .json, or .shp path.")
+    parser.add_argument("--output", type=Path, required=True, help="Destination .geojson, .json, .shp, or .gpkg path.")
+    parser.add_argument("--building-values", help="逗号分隔的 building 取值；留空表示全部。")
+    parser.add_argument("--cache-dir", type=Path, help="分块响应缓存目录，用于断点续跑。")
+    parser.add_argument("--refresh-cache", action="store_true", help="忽略已有缓存并重新请求每个分块。")
+    parser.add_argument("--jobs", type=int, default=1, help="并行分块查询数，取值 1-8（默认: 1）。")
     parser.add_argument("--endpoint", action="append", help="Overpass API URL. Repeat to define fallback endpoints.")
     parser.add_argument("--date", help="Optional historical OSM snapshot in ISO 8601 UTC, e.g. 2024-01-01T00:00:00Z.")
     parser.add_argument("--timeout", type=int, default=120, help="Overpass and HTTP timeout in seconds (default: 120).")
@@ -191,6 +202,53 @@ def query_tile(endpoints: Iterable[str], bbox: list[float], timeout: int, retrie
     raise RuntimeError("All Overpass requests failed:\n" + "\n".join(errors))
 
 
+def cache_key(bbox: list[float], snapshot_date: str | None) -> str:
+    """根据范围和快照时刻生成稳定的缓存键。"""
+    payload = json.dumps({"bbox": list(bbox), "snapshot_date": snapshot_date}, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def read_cached_response(cache_dir: Path, key: str) -> dict[str, Any] | None:
+    """读取分块缓存响应，文件不存在时返回 None。"""
+    path = cache_dir / f"{key}.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_cached_response(cache_dir: Path, key: str, response: dict[str, Any]) -> None:
+    """先写临时文件再原子替换，避免中断留下半截缓存。"""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    temporary = cache_dir / f"{key}.json.tmp"
+    temporary.write_text(json.dumps(response, ensure_ascii=False), encoding="utf-8")
+    os.replace(temporary, cache_dir / f"{key}.json")
+
+
+def collect_tile_responses(endpoints: Iterable[str], tiles: list[list[float]], timeout: int, retries: int, snapshot_date: str | None, deadline: float | None, jobs: int, cache_dir: Path | None, refresh_cache: bool, show_progress: bool) -> list[dict[str, Any]]:
+    """按分块收集 Overpass 响应，支持缓存命中与并行执行。"""
+    def process(item: tuple[int, list[float]]) -> dict[str, Any]:
+        """处理单个分块：输出进度、读取缓存、必要时请求并写回缓存。"""
+        index, tile = item
+        if show_progress:
+            print(tile_progress_line(index, len(tiles), tile), flush=True)
+        if cache_dir is not None:
+            key = cache_key(tile, snapshot_date)
+            if not refresh_cache:
+                cached = read_cached_response(cache_dir, key)
+                if cached is not None:
+                    return cached
+        response = query_tile(endpoints, tile, timeout, retries, snapshot_date, deadline)
+        if cache_dir is not None:
+            write_cached_response(cache_dir, key, response)
+        return response
+
+    items = list(enumerate(tiles, start=1))
+    if jobs <= 1:
+        return [process(item) for item in items]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as executor:
+        return list(executor.map(process, items))
+
+
 def polygon_from_ring(coordinates: list[dict[str, float]]) -> Polygon | None:
     points = [(point["lon"], point["lat"]) for point in coordinates]
     if len(points) < 3:
@@ -232,7 +290,7 @@ def element_geometry(element: dict[str, Any]) -> Any | None:
     return element_geometry_with_reason(element)[0]
 
 
-def convert_to_geojson(source: Iterable[dict[str, Any]], bbox: list[float], snapshot_date: str | None, clip_geometry: Any | None) -> dict[str, Any]:
+def convert_to_geojson(source: Iterable[dict[str, Any]], bbox: list[float], snapshot_date: str | None, clip_geometry: Any | None, building_values: set[str] | None = None) -> dict[str, Any]:
     """把 Overpass 元素转换为 GeoJSON，并在元数据中记录丢弃诊断。"""
     elements = list(source)
     # 只从能生成有效几何的 relation 收集成员 way，避免残缺 relation 导致独立 way 被误判为重复
@@ -255,6 +313,9 @@ def convert_to_geojson(source: Iterable[dict[str, Any]], bbox: list[float], snap
         if key in seen:
             continue
         seen.add(key)
+        if building_values and element.get("tags", {}).get("building") not in building_values:
+            diagnostics["filtered_elements"] += 1
+            continue
         if osm_type == "way" and osm_id in member_way_refs:
             diagnostics["duplicate_member_way"] += 1
             continue
@@ -338,6 +399,40 @@ def write_shapefile(path: Path, data: dict[str, Any]) -> None:
     path.with_suffix(".fields.json").write_text(json.dumps(field_mapping, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def geopackage_schema(features: list[dict[str, Any]]) -> dict[str, Any]:
+    """按属性并集推导 GeoPackage schema，几何类型固定为 MultiPolygon。"""
+    property_names = sorted({name for feature in features for name in feature["properties"]})
+    properties = {}
+    for name in property_names:
+        values = [feature["properties"].get(name) for feature in features if feature["properties"].get(name) is not None]
+        if values and all(isinstance(value, bool) for value in values):
+            properties[name] = "int"
+        elif values and all(isinstance(value, int) and not isinstance(value, bool) for value in values):
+            properties[name] = "int"
+        elif values and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
+            properties[name] = "float"
+        else:
+            properties[name] = "str"
+    return {"geometry": "MultiPolygon", "properties": properties}
+
+
+def write_geopackage(path: Path, data: dict[str, Any]) -> None:
+    """把要素写入 GeoPackage，并生成与 SHP 侧车一致的元数据文件。"""
+    if fiona is None:
+        raise ValueError('Writing GeoPackage requires fiona. Install it with pip install "osm-building-downloader[gpkg]".')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    features = data["features"]
+    schema = geopackage_schema(features)
+    with fiona.open(path, "w", driver="GPKG", schema=schema, crs="EPSG:4326", layer="buildings") as sink:
+        for feature in features:
+            geometry = shape(feature["geometry"])
+            if geometry.geom_type == "Polygon":
+                geometry = MultiPolygon([geometry])
+            properties = {name: feature["properties"].get(name) for name in schema["properties"]}
+            sink.write({"geometry": mapping(geometry), "properties": properties})
+    path.with_suffix(".metadata.json").write_text(json.dumps(data["metadata"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def write_output(path: Path, data: dict[str, Any]) -> str:
     suffix = path.suffix.lower()
     if suffix in {".geojson", ".json"}:
@@ -346,7 +441,10 @@ def write_output(path: Path, data: dict[str, Any]) -> str:
     if suffix == ".shp":
         write_shapefile(path, data)
         return "Shapefile"
-    raise ValueError("--output must end in .geojson, .json, or .shp.")
+    if suffix == ".gpkg":
+        write_geopackage(path, data)
+        return "GeoPackage"
+    raise ValueError("--output must end in .geojson, .json, .shp, or .gpkg.")
 
 
 def main() -> int:
@@ -363,15 +461,14 @@ def main() -> int:
             raise ValueError("--retries must be zero or greater.")
         if args.deadline < 0:
             raise ValueError("--deadline must be zero or greater.")
+        if not 1 <= args.jobs <= 8:
+            raise ValueError("--jobs must be between 1 and 8.")
+        building_values = {value.strip() for value in args.building_values.split(",") if value.strip()} if args.building_values else None
         snapshot_date = parse_snapshot_date(args.date)
         deadline = time.monotonic() + args.deadline if args.deadline > 0 else None
         tiles = split_bbox(bbox, args.tile_size, args.max_tiles)
         endpoints = tuple(args.endpoint) if args.endpoint else DEFAULT_ENDPOINTS
-        raw_responses = []
-        for index, tile in enumerate(tiles, start=1):
-            if len(tiles) > 1:
-                print(tile_progress_line(index, len(tiles), tile), flush=True)
-            raw_responses.append(query_tile(endpoints, tile, args.timeout, args.retries, snapshot_date, deadline))
+        raw_responses = collect_tile_responses(endpoints, tiles, args.timeout, args.retries, snapshot_date, deadline, args.jobs, args.cache_dir, args.refresh_cache, len(tiles) > 1)
     except (ValueError, RuntimeError, HTTPError, URLError, TimeoutError) as error:
         print(f"Download failed: {error}", file=sys.stderr)
         return 1
@@ -379,7 +476,7 @@ def main() -> int:
     if args.save_raw:
         args.save_raw.parent.mkdir(parents=True, exist_ok=True)
         args.save_raw.write_text(json.dumps({"responses": raw_responses}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    geojson = convert_to_geojson(elements, bbox, snapshot_date, clip_geometry)
+    geojson = convert_to_geojson(elements, bbox, snapshot_date, clip_geometry, building_values=building_values)
     geojson["metadata"]["query_tiles"] = len(tiles)
     try:
         output_format = write_output(args.output, geojson)

@@ -31,6 +31,12 @@ class GuiCommandTests(unittest.TestCase):
     def test_output_format_selects_expected_extension(self):
         self.assertEqual(output_extension("GeoJSON (.geojson)"), ".geojson")
         self.assertEqual(output_extension("Shapefile (.shp)"), ".shp")
+        self.assertEqual(output_extension("GeoPackage (.gpkg)"), ".gpkg")
+
+    def test_building_values_are_passed_to_command(self):
+        command = build_command("bbox", ["30.0", "120.0", "31.0", "121.0"], "", "out.geojson", "", "0.05", "2", building_values="yes,house")
+        self.assertIn("--building-values", command)
+        self.assertEqual(command[command.index("--building-values") + 1], "yes,house")
 
     def test_tile_size_is_converted_to_metres_at_selected_latitude(self):
         north_south, east_west = tile_size_to_meters("0.05", 30.75)
