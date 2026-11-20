@@ -110,9 +110,16 @@ def validate_download_inputs(source_mode: str, bbox: Sequence[str] | str, shp_pa
         raise ValueError("重试次数不能小于 0。")
 
 
+def downloader_command_prefix() -> list[str]:
+    """返回启动下载程序的命令前缀：打包运行时使用同目录的 CLI 可执行文件。"""
+    if getattr(sys, "frozen", False):
+        return [str(Path(sys.executable).with_name("osm-buildings-cli.exe"))]
+    return [sys.executable, str(DOWNLOADER)]
+
+
 def build_command(source_mode: str, bbox: Sequence[str] | str, shp_path: str, output_path: str, snapshot_date: str, tile_size: str, retries: str, building_values: str = "") -> list[str]:
     """Build a safe subprocess command from validated GUI field values."""
-    command = [sys.executable, str(DOWNLOADER)]
+    command = downloader_command_prefix()
     if source_mode == "shp":
         if not shp_path.strip():
             raise ValueError("请选择研究区 SHP 文件。")
@@ -451,6 +458,7 @@ class DownloaderApp(ctk.CTkFrame):
             if self.cancel_requested:
                 self.process.terminate()
             received_output = False
+            assert self.process.stdout is not None
             for line in self.process.stdout:
                 text = line.rstrip()
                 if text:

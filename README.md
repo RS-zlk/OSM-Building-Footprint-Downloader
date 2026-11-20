@@ -40,6 +40,23 @@ conda env create -f environment.yml
 conda activate osm-buildings
 ```
 
+也可以直接用 pip 安装到现有 Python 环境（需要 Python 3.10 及以上）：
+
+```bash
+pip install -e ".[gui,gpkg]"
+```
+
+其中 `gui` 额外安装桌面界面依赖 `customtkinter`，`gpkg` 额外安装 GeoPackage 输出依赖 `fiona`；如需开发工具（ruff、mypy、PyInstaller），使用 `pip install -e ".[gui,gpkg,dev]"`。
+
+安装后会提供两个命令行入口，分别对应命令行下载与桌面界面：
+
+```bash
+osm-buildings --help
+osm-buildings-gui
+```
+
+也可以继续使用源码方式运行 `python download_buildings.py` 与 `python gui.py`。
+
 ## 用法
 
 经纬度范围的顺序必须是：`南 西 北 东`（WGS84 / EPSG:4326）。程序会在范围较大时以 `0.05° × 0.05°` 网格自动分块，并对失败请求重试、在两个 Overpass 服务之间自动切换。
@@ -88,7 +105,7 @@ python download_buildings.py \
   --output data/wuzhen_buildings.gpkg
 ```
 
-GeoPackage 输出依赖 `fiona`。可安装 `fiona`，或在后续版本提供可选依赖后使用 `pip install -e ".[gpkg]"`。程序会写入名为 `buildings` 的图层，几何统一为 MultiPolygon，并生成与 Shapefile 一致的 `.metadata.json` 侧车文件。
+GeoPackage 输出依赖 `fiona`，可通过 `pip install -e ".[gpkg]"` 安装。程序会写入名为 `buildings` 的图层，几何统一为 MultiPolygon，并生成与 Shapefile 一致的 `.metadata.json` 侧车文件。
 
 ### 按建筑类型过滤
 
@@ -173,6 +190,23 @@ python download_buildings.py \
 - `--tile-size 0` 可关闭自动分块；`--max-tiles` 用于避免意外提交过大的任务。
 - 多个 `--endpoint` 按顺序作为故障切换服务；不指定时使用内置的两个端点。
 - 可使用 `--save-raw` 保存每个网格的原始 Overpass 响应，便于复现和排查。
+
+## Windows 可执行文件
+
+在 Windows 上可以用 PyInstaller 打包为单文件可执行程序，无需目标机器安装 Python：
+
+```powershell
+python -m pip install -e ".[gui,gpkg,dev]"
+python -m PyInstaller packaging/osm_buildings_cli.spec --noconfirm --distpath build/exe --workpath build/pyinstaller
+python -m PyInstaller packaging/osm_buildings_gui.spec --noconfirm --distpath build/exe --workpath build/pyinstaller
+```
+
+构建产物位于 `build/exe`：
+
+- `osm-buildings-cli.exe`：命令行下载程序，等价于 `osm-buildings`，支持 GeoJSON、Shapefile 与 GeoPackage 输出（已打包 `fiona` 与 GDAL）。
+- `osm-buildings-gui.exe`：桌面界面，运行时从同一目录调用 `osm-buildings-cli.exe`，因此两者需要放在一起分发。
+
+`build/` 与 `dist/` 为构建中间产物和输出目录，已被 Git 忽略。
 
 ## 数据范围与限制
 

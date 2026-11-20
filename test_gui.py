@@ -1,8 +1,11 @@
 import sys
 import unittest
 from datetime import date
+from pathlib import Path
+from unittest import mock
 
-from gui import DOWNLOADER, available_days, build_command, output_extension, snapshot_text_to_iso, snapshot_to_iso, tile_size_to_meters, validate_download_inputs
+import gui
+from gui import DOWNLOADER, available_days, build_command, downloader_command_prefix, output_extension, snapshot_text_to_iso, snapshot_to_iso, tile_size_to_meters, validate_download_inputs
 
 
 class GuiCommandTests(unittest.TestCase):
@@ -57,6 +60,17 @@ class GuiCommandTests(unittest.TestCase):
             validate_download_inputs("bbox", ["30", "120", "31", "121"], "", "out.geojson", "-0.05", "2")
         with self.assertRaisesRegex(ValueError, "不能小于 0"):
             validate_download_inputs("bbox", ["30", "120", "31", "121"], "", "out.geojson", "0.05", "-1")
+
+    def test_command_prefix_uses_script_in_development_mode(self):
+        """未打包时命令前缀应使用当前解释器与 download_buildings.py 脚本。"""
+        self.assertEqual(downloader_command_prefix(), [sys.executable, str(DOWNLOADER)])
+
+    def test_command_prefix_uses_bundled_cli_when_frozen(self):
+        """打包运行时命令前缀应指向与 GUI 同目录的 osm-buildings-cli.exe。"""
+        executable = Path("C:/app/osm-buildings-gui.exe")
+        with mock.patch.object(gui.sys, "frozen", True, create=True), mock.patch.object(gui.sys, "executable", str(executable)):
+            prefix = downloader_command_prefix()
+        self.assertEqual(prefix, [str(executable.with_name("osm-buildings-cli.exe"))])
 
 
 if __name__ == "__main__":

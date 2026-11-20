@@ -4,7 +4,7 @@ import unittest
 from email.message import Message
 from pathlib import Path
 from unittest import mock
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import shapefile
 from shapely.geometry import box
@@ -44,6 +44,42 @@ class DownloadBuildingsTests(unittest.TestCase):
             with self.assertRaisesRegex(TimeoutError, "deadline"):
                 app.query_tile(["https://example.invalid/api/interpreter"], [0, 0, 1, 1], 10, 0, None, time.monotonic() - 1)
         fetch_json.assert_not_called()
+
+    def test_overpass_query_contains_date_and_bbox(self):
+        """查询语句应包含快照日期子句与四个范围坐标。"""
+        query = app.overpass_query([1.5, 2.5, 3.5, 4.5], 60, "2024-01-01T00:00:00Z")
+        self.assertIn('[date:"2024-01-01T00:00:00Z"]', query)
+        self.assertIn("(1.5,2.5,3.5,4.5)", query)
+
+    def test_query_tile_falls_back_to_next_endpoint(self):
+        """首个端点抛出 URLError 后应切换到下一个端点并返回其响应。"""
+        first = "https://first.invalid/api/interpreter"
+        second = "https://second.invalid/api/interpreter"
+        calls = []
+
+        def fake_fetch_json(endpoint: str, query: str, timeout: float):
+            """记录请求端点，首个端点失败，第二个端点返回空结果。"""
+            calls.append(endpoint)
+            if endpoint == first:
+                raise URLError("connection refused")
+            return {"elements": []}
+
+        with mock.patch.object(app, "fetch_json", side_effect=fake_fetch_json), mock.patch.object(app.time, "sleep"):
+            result = app.query_tile([first, second], [0, 0, 1, 1], 10, 0, None)
+        self.assertEqual(result, {"elements": []})
+        self.assertEqual(calls, [first, second])
+
+    def test_query_tile_reports_all_failures(self):
+        """所有端点与重试均失败时应抛出汇总两个端点与尝试次数的 RuntimeError。"""
+        first = "https://first.invalid/api/interpreter"
+        second = "https://second.invalid/api/interpreter"
+        with mock.patch.object(app, "fetch_json", side_effect=URLError("connection refused")), mock.patch.object(app.time, "sleep"):
+            with self.assertRaises(RuntimeError) as raised:
+                app.query_tile([first, second], [0, 0, 1, 1], 10, 1, None)
+        message = str(raised.exception)
+        self.assertIn(first, message)
+        self.assertIn(second, message)
+        self.assertIn("attempt", message)
 
     def test_relation_with_hole(self):
         relation = {

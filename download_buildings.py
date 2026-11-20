@@ -26,21 +26,21 @@ if _PROJ_DATA.is_dir():
     os.environ["PROJ_DATA"] = str(_PROJ_DATA)
     os.environ["PROJ_LIB"] = str(_PROJ_DATA)
 
-import shapefile
-from pyproj import CRS, Transformer, datadir
-from shapely.geometry import LineString, MultiPolygon, Polygon, mapping, shape
-from shapely.ops import polygonize, transform, unary_union
+import shapefile  # noqa: E402
+from pyproj import CRS, Transformer, datadir  # noqa: E402
+from shapely.geometry import LineString, MultiPolygon, Polygon, mapping, shape  # noqa: E402
+from shapely.ops import polygonize, transform, unary_union  # noqa: E402
 
 try:
     import fiona
 except ImportError:
-    fiona = None
+    fiona = None  # type: ignore[assignment]
 
 DEFAULT_ENDPOINTS = (
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 )
-USER_AGENT = "osm-building-downloader/2.0 (local data export)"
+USER_AGENT = "osm-building-downloader/2.1 (local data export)"
 # 丢弃与过滤诊断项的固定顺序，保证 CLI 摘要与元数据输出稳定
 DIAGNOSTIC_KEYS = ("invalid_geometry", "incomplete_relation", "non_polygon", "duplicate_member_way", "unsupported_element", "filtered_elements")
 
@@ -178,7 +178,7 @@ def query_tile(endpoints: Iterable[str], bbox: list[float], timeout: int, retrie
     errors: list[str] = []
     for endpoint in endpoints:
         for attempt in range(retries + 1):
-            request_timeout = timeout + 15
+            request_timeout = float(timeout + 15)
             if deadline is not None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -258,7 +258,9 @@ def polygon_from_ring(coordinates: list[dict[str, float]]) -> Polygon | None:
 
 
 def relation_geometry(element: dict[str, Any]) -> Any | None:
-    outer_lines, inner_lines = [], []
+    """把 relation 的 outer/inner 成员线拼接为带孔洞的几何，无法闭合时返回 None。"""
+    outer_lines: list[LineString] = []
+    inner_lines: list[LineString] = []
     for member in element.get("members", []):
         points = [(point["lon"], point["lat"]) for point in member.get("geometry", [])]
         if len(points) < 2:
