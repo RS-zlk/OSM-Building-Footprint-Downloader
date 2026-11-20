@@ -1,3 +1,4 @@
+import http.client
 import tempfile
 import time
 import unittest
@@ -80,6 +81,26 @@ class DownloadBuildingsTests(unittest.TestCase):
         self.assertIn(first, message)
         self.assertIn(second, message)
         self.assertIn("attempt", message)
+
+    def test_query_tile_handles_remote_disconnected(self):
+        """连接被远端关闭时应记录失败并抛出包含端点的 RuntimeError。"""
+        first = "https://first.invalid/api/interpreter"
+        second = "https://second.invalid/api/interpreter"
+        with mock.patch.object(app, "fetch_json", side_effect=http.client.RemoteDisconnected("Remote end closed connection without response")), mock.patch.object(app.time, "sleep"):
+            with self.assertRaises(RuntimeError) as raised:
+                app.query_tile([first, second], [0, 0, 1, 1], 10, 0, None)
+        message = str(raised.exception)
+        self.assertIn(first, message)
+        self.assertIn(second, message)
+
+    def test_query_tile_retries_remote_disconnected(self):
+        """连接被远端关闭时应在同一端点重试，重试次数用尽后抛出 RuntimeError。"""
+        endpoint = "https://example.invalid/api/interpreter"
+        with mock.patch.object(app, "fetch_json", side_effect=http.client.RemoteDisconnected("Remote end closed connection without response")) as fetch_json, mock.patch.object(app.time, "sleep"):
+            with self.assertRaises(RuntimeError) as raised:
+                app.query_tile([endpoint], [0, 0, 1, 1], 10, 1, None)
+        self.assertIn(endpoint, str(raised.exception))
+        self.assertEqual(fetch_json.call_count, 2)
 
     def test_relation_with_hole(self):
         relation = {

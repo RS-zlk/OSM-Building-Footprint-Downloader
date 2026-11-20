@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -195,7 +196,7 @@ def query_tile(endpoints: Iterable[str], bbox: list[float], timeout: int, retrie
                     if deadline is not None:
                         wait = max(min(wait, deadline - time.monotonic()), 0)
                     time.sleep(wait)
-            except (URLError, TimeoutError, json.JSONDecodeError) as error:
+            except (URLError, TimeoutError, json.JSONDecodeError, http.client.RemoteDisconnected) as error:
                 errors.append(f"{endpoint} (attempt {attempt + 1}): {error}")
                 if attempt < retries:
                     time.sleep(min(2**attempt, 4))
