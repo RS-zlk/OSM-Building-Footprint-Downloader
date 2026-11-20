@@ -277,6 +277,26 @@ class DownloadBuildingsTests(unittest.TestCase):
             metadata = app.json.loads(path.with_suffix(".metadata.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["diagnostics"], diagnostics)
 
+    def test_write_shapefile_supports_empty_features(self):
+        """要素为空时仍应生成合法的 Shapefile，并回退到 osm_id 字段。"""
+        diagnostics = {"invalid_geometry": 0, "incomplete_relation": 0, "non_polygon": 0, "duplicate_member_way": 0, "unsupported_element": 0, "filtered_elements": 0}
+        data = {"metadata": {"crs": "EPSG:4326", "diagnostics": diagnostics}, "features": []}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "buildings.shp"
+            self.assertEqual(app.write_output(path, data), "Shapefile")
+            reader = shapefile.Reader(str(path), encoding="utf-8")
+            try:
+                self.assertEqual(len(reader), 0)
+                self.assertIn("osm_id", [field[0] for field in reader.fields[1:]])
+            finally:
+                reader.close()
+            self.assertTrue(path.with_suffix(".shp").exists())
+            self.assertTrue(path.with_suffix(".shx").exists())
+            self.assertTrue(path.with_suffix(".dbf").exists())
+            self.assertTrue(path.with_suffix(".metadata.json").exists())
+            metadata = app.json.loads(path.with_suffix(".metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["diagnostics"], diagnostics)
+
 
 if __name__ == "__main__":
     unittest.main()

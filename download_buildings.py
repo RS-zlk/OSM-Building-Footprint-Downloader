@@ -396,6 +396,8 @@ def write_shapefile(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     features = data["features"]
     fields = shapefile_fields(features)
+    if not fields:
+        fields = [("osm_id", "osm_id", "N", 10, 0)]
     with shapefile.Writer(str(path), shapeType=shapefile.POLYGON, encoding="utf-8") as writer:
         for _original, field_name, field_type, size, decimal in fields:
             writer.field(field_name, field_type, size=size, decimal=decimal)

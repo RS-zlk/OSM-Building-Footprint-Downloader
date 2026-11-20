@@ -42,6 +42,26 @@ def fake_fetch_and_convert(**kwargs):
     return sample_data(), [[30.0, 120.0, 30.2, 120.2]], [{"elements": []}]
 
 
+def empty_data() -> dict:
+    """构造不含任何要素的模拟下载结果。"""
+    return {
+        "type": "FeatureCollection",
+        "metadata": {
+            "diagnostics": dict(DIAGNOSTICS),
+            "query_bbox_wgs84_south_west_north_east": [30.0, 120.0, 30.2, 120.2],
+        },
+        "features": [],
+    }
+
+
+def fake_fetch_and_convert_empty(**kwargs):
+    """模拟下载：调用一次进度回调并返回空要素数据、分块与原始响应。"""
+    on_progress = kwargs.get("on_progress")
+    if on_progress is not None:
+        on_progress("[tile 1/1] south=30.0 west=120.0 north=30.2 east=120.2")
+    return empty_data(), [[30.0, 120.0, 30.2, 120.2]], [{"elements": []}]
+
+
 def valid_request(root: str, request_id: str = "demo-1") -> dict:
     """构造一份合法请求，输出根目录由调用方指定。"""
     return {
@@ -77,6 +97,24 @@ class TiffGetterAdapterTests(unittest.TestCase):
             self.assertIn("log", event_types)
             self.assertIn("progress", event_types)
             self.assertIn("run_summary", event_types)
+
+    def test_run_request_writes_all_formats_for_empty_features(self):
+        """空要素请求应返回成功，并写出 geojson、shp、gpkg 与 metadata 四个文件。"""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            payload = valid_request(str(temporary / "out"), "empty-1")
+            payload["output"]["formats"] = ["geojson", "shp", "gpkg"]
+            config = adapter.parse_request(payload)
+            events = adapter.EventWriter(None)
+            with mock.patch.object(adapter.downloader, "fetch_and_convert", side_effect=fake_fetch_and_convert_empty):
+                result = adapter.run_request(config, events, "2026-01-01T00:00:00+00:00")
+            events.close()
+            self.assertEqual(result["exit_code"], 0)
+            self.assertEqual(result["status"], "success")
+            assets = result["items"][0]["assets"]
+            for name in ("geojson", "shp", "gpkg", "metadata"):
+                self.assertTrue(Path(assets[name]).exists(), name)
+            self.assertEqual(result["items"][0]["feature_count"], 0)
 
     def test_parse_request_defaults_formats_to_geojson(self):
         """省略 output.formats 时应默认只输出 GeoJSON。"""
