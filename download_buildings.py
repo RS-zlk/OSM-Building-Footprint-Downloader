@@ -191,10 +191,11 @@ def element_geometry(element: dict[str, Any]) -> Any | None:
 def convert_to_geojson(source: Iterable[dict[str, Any]], bbox: list[float], snapshot_date: str | None, clip_geometry: Any | None) -> dict[str, Any]:
     """把 Overpass 元素转换为 GeoJSON，并在元数据中记录丢弃诊断。"""
     elements = list(source)
+    # 只从能生成有效几何的 relation 收集成员 way，避免残缺 relation 导致独立 way 被误判为重复
     member_way_refs = {
         member["ref"]
         for element in elements
-        if element.get("type") == "relation"
+        if element.get("type") == "relation" and relation_geometry(element) is not None
         for member in element.get("members", [])
         if member.get("type") == "way" and isinstance(member.get("ref"), int)
     }

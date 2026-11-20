@@ -85,6 +85,22 @@ class DownloadBuildingsTests(unittest.TestCase):
         self.assertEqual([feature["properties"]["osm_type"] for feature in data["features"]], ["relation"])
         self.assertEqual(data["metadata"]["diagnostics"]["duplicate_member_way"], 1)
 
+    def test_incomplete_relation_does_not_hide_valid_member_way(self):
+        relation = {
+            "type": "relation",
+            "id": 11,
+            "members": [
+                {"type": "way", "ref": 5, "role": "outer", "geometry": [{"lon": 0, "lat": 0}, {"lon": 1, "lat": 0}]},
+                {"type": "way", "ref": 5, "role": "outer", "geometry": [{"lon": 2, "lat": 2}, {"lon": 3, "lat": 3}]},
+            ],
+        }
+        way = {"type": "way", "id": 5, "geometry": [{"lon": 0, "lat": 0}, {"lon": 1, "lat": 0}, {"lon": 1, "lat": 1}, {"lon": 0, "lat": 1}, {"lon": 0, "lat": 0}]}
+        data = app.convert_to_geojson([relation, way], [0, 0, 1, 1], None, None)
+        self.assertEqual(len(data["features"]), 1)
+        self.assertEqual(data["features"][0]["properties"]["osm_id"], 5)
+        self.assertEqual(data["metadata"]["diagnostics"]["incomplete_relation"], 1)
+        self.assertEqual(data["metadata"]["diagnostics"]["duplicate_member_way"], 0)
+
     def test_node_element_is_unsupported(self):
         data = app.convert_to_geojson([{"type": "node", "id": 7}], [0, 0, 1, 1], None, None)
         self.assertEqual(data["features"], [])
