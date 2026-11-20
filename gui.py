@@ -436,13 +436,21 @@ class DownloaderApp(ctk.CTkFrame):
             self.process.terminate()
 
     def _run_download(self, command: Sequence[str]) -> None:
+        """后台运行下载子进程，逐行把输出放入事件队列并报告结束码。"""
         try:
-            self.process = subprocess.Popen(command, cwd=PROJECT_DIR, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            self.process = subprocess.Popen(command, cwd=PROJECT_DIR, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
             if self.cancel_requested:
                 self.process.terminate()
-            output, _ = self.process.communicate()
-            self.events.put(("log", output.strip() or "下载程序未输出日志。"))
-            self.events.put(("finished", self.process.returncode or 0))
+            received_output = False
+            for line in self.process.stdout:
+                text = line.rstrip()
+                if text:
+                    received_output = True
+                self.events.put(("log", text))
+            returncode = self.process.wait()
+            if not received_output:
+                self.events.put(("log", "下载程序未输出日志。"))
+            self.events.put(("finished", returncode or 0))
         except OSError as error:
             self.events.put(("log", f"无法启动下载程序：{error}"))
             self.events.put(("finished", 1))

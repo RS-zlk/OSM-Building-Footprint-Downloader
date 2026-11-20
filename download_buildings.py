@@ -10,6 +10,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
@@ -50,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--date", help="Optional historical OSM snapshot in ISO 8601 UTC, e.g. 2024-01-01T00:00:00Z.")
     parser.add_argument("--timeout", type=int, default=120, help="Overpass and HTTP timeout in seconds (default: 120).")
     parser.add_argument("--retries", type=int, default=2, help="Retries per endpoint after a transient failure (default: 2).")
+    parser.add_argument("--deadline", type=int, default=0, help="整次运行的总时限（秒），0 表示不限制。")
     parser.add_argument("--tile-size", type=float, default=0.05, help="Maximum tile width/height in degrees; use 0 to disable splitting (default: 0.05).")
     parser.add_argument("--max-tiles", type=int, default=2_000, help="Safety limit for generated query tiles (default: 2000).")
     parser.add_argument("--shp-crs", help="Override the input SHP CRS, e.g. EPSG:3857. Otherwise its .prj file is required.")
@@ -121,26 +123,68 @@ def split_bbox(bbox: list[float], tile_size: float, max_tiles: int) -> list[list
     return [[lat, lon, min(lat + tile_size, north), min(lon + tile_size, east)] for lat in (south + row * tile_size for row in range(rows)) for lon in (west + column * tile_size for column in range(columns))]
 
 
+def tile_progress_line(index: int, total: int, bbox: list[float]) -> str:
+    """返回单个分块查询的进度行，包含分块序号与四至范围。"""
+    return f"[tile {index}/{total}] south={bbox[0]} west={bbox[1]} north={bbox[2]} east={bbox[3]}"
+
+
 def overpass_query(bbox: list[float], timeout: int, snapshot_date: str | None) -> str:
     south, west, north, east = bbox
     date_clause = f'[date:"{snapshot_date}"]' if snapshot_date else ""
     return f'[out:json][timeout:{timeout}]{date_clause};(way["building"]({south},{west},{north},{east});relation["building"]["type"="multipolygon"]({south},{west},{north},{east}););out geom;'
 
 
-def fetch_json(endpoint: str, query: str, timeout: int) -> dict[str, Any]:
+def fetch_json(endpoint: str, query: str, timeout: float) -> dict[str, Any]:
+    """请求 Overpass 接口并解析 JSON，超时值由调用方直接决定。"""
     request = Request(endpoint, data=urlencode({"data": query}).encode("utf-8"), headers={"User-Agent": USER_AGENT})
-    with urlopen(request, timeout=timeout + 15) as response:
+    with urlopen(request, timeout=timeout) as response:
         return json.load(response)
 
 
-def query_tile(endpoints: Iterable[str], bbox: list[float], timeout: int, retries: int, snapshot_date: str | None) -> dict[str, Any]:
+def retry_after_seconds(value: str | None) -> float | None:
+    """解析 Retry-After 响应头，支持纯数字秒与 HTTP-date，无法解析时返回 None。"""
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        target = parsedate_to_datetime(text)
+    except ValueError:
+        return None
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=timezone.utc)
+    return max((target - datetime.now(timezone.utc)).total_seconds(), 0.0)
+
+
+def query_tile(endpoints: Iterable[str], bbox: list[float], timeout: int, retries: int, snapshot_date: str | None, deadline: float | None = None) -> dict[str, Any]:
+    """查询单个分块，按端点与重试次数请求，并遵守总时限与 Retry-After。"""
     query = overpass_query(bbox, timeout, snapshot_date)
     errors: list[str] = []
     for endpoint in endpoints:
         for attempt in range(retries + 1):
+            request_timeout = timeout + 15
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("已超出总时限（--deadline）")
+                request_timeout = max(min(timeout + 15, remaining), 1)
             try:
-                return fetch_json(endpoint, query, timeout)
-            except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as error:
+                return fetch_json(endpoint, query, request_timeout)
+            except HTTPError as error:
+                errors.append(f"{endpoint} (attempt {attempt + 1}): {error}")
+                if attempt < retries:
+                    wait = retry_after_seconds(error.headers.get("Retry-After") if error.headers is not None else None)
+                    if wait is None:
+                        wait = min(2**attempt, 4)
+                    if deadline is not None:
+                        wait = max(min(wait, deadline - time.monotonic()), 0)
+                    time.sleep(wait)
+            except (URLError, TimeoutError, json.JSONDecodeError) as error:
                 errors.append(f"{endpoint} (attempt {attempt + 1}): {error}")
                 if attempt < retries:
                     time.sleep(min(2**attempt, 4))
@@ -317,10 +361,17 @@ def main() -> int:
         validate_bbox(bbox)
         if args.retries < 0:
             raise ValueError("--retries must be zero or greater.")
+        if args.deadline < 0:
+            raise ValueError("--deadline must be zero or greater.")
         snapshot_date = parse_snapshot_date(args.date)
+        deadline = time.monotonic() + args.deadline if args.deadline > 0 else None
         tiles = split_bbox(bbox, args.tile_size, args.max_tiles)
         endpoints = tuple(args.endpoint) if args.endpoint else DEFAULT_ENDPOINTS
-        raw_responses = [query_tile(endpoints, tile, args.timeout, args.retries, snapshot_date) for tile in tiles]
+        raw_responses = []
+        for index, tile in enumerate(tiles, start=1):
+            if len(tiles) > 1:
+                print(tile_progress_line(index, len(tiles), tile), flush=True)
+            raw_responses.append(query_tile(endpoints, tile, args.timeout, args.retries, snapshot_date, deadline))
     except (ValueError, RuntimeError, HTTPError, URLError, TimeoutError) as error:
         print(f"Download failed: {error}", file=sys.stderr)
         return 1
@@ -337,8 +388,8 @@ def main() -> int:
         return 1
     diagnostics = geojson["metadata"]["diagnostics"]
     if any(diagnostics.values()):
-        print("丢弃/过滤统计：" + ", ".join(f"{key}={value}" for key, value in diagnostics.items() if value))
-    print(f"Saved {len(geojson['features'])} building footprints as {output_format} from {len(tiles)} tile(s) to {args.output}")
+        print("丢弃/过滤统计：" + ", ".join(f"{key}={value}" for key, value in diagnostics.items() if value), flush=True)
+    print(f"Saved {len(geojson['features'])} building footprints as {output_format} from {len(tiles)} tile(s) to {args.output}", flush=True)
     return 0
 
 

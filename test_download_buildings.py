@@ -1,6 +1,10 @@
 import tempfile
+import time
 import unittest
+from email.message import Message
 from pathlib import Path
+from unittest import mock
+from urllib.error import HTTPError
 
 import shapefile
 from shapely.geometry import box
@@ -13,6 +17,33 @@ class DownloadBuildingsTests(unittest.TestCase):
         self.assertEqual(len(app.split_bbox([0, 0, 0.11, 0.11], 0.05, 9)), 9)
         with self.assertRaisesRegex(ValueError, "exceeding"):
             app.split_bbox([0, 0, 0.11, 0.11], 0.05, 8)
+
+    def test_tile_progress_line_format(self):
+        self.assertEqual(app.tile_progress_line(2, 5, [1.0, 2.0, 3.0, 4.0]), "[tile 2/5] south=1.0 west=2.0 north=3.0 east=4.0")
+
+    def test_query_tile_honors_retry_after(self):
+        headers = Message()
+        headers["Retry-After"] = "5"
+        rate_limit_error = HTTPError("https://example.invalid/api/interpreter", 429, "Too Many Requests", headers, None)
+        responses = [rate_limit_error, {"elements": []}]
+
+        def fake_fetch_json(endpoint: str, query: str, timeout: float):
+            """依次返回预设响应，异常对象则直接抛出。"""
+            result = responses.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        with mock.patch.object(app, "fetch_json", side_effect=fake_fetch_json), mock.patch.object(app.time, "sleep") as sleep:
+            result = app.query_tile(["https://example.invalid/api/interpreter"], [0, 0, 1, 1], 10, 1, None)
+        self.assertEqual(result, {"elements": []})
+        self.assertIn(5, [call.args[0] for call in sleep.call_args_list])
+
+    def test_query_tile_stops_when_deadline_exceeded(self):
+        with mock.patch.object(app, "fetch_json") as fetch_json:
+            with self.assertRaisesRegex(TimeoutError, "deadline"):
+                app.query_tile(["https://example.invalid/api/interpreter"], [0, 0, 1, 1], 10, 0, None, time.monotonic() - 1)
+        fetch_json.assert_not_called()
 
     def test_relation_with_hole(self):
         relation = {
