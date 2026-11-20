@@ -78,6 +78,27 @@ class TiffGetterAdapterTests(unittest.TestCase):
             self.assertIn("progress", event_types)
             self.assertIn("run_summary", event_types)
 
+    def test_parse_request_defaults_formats_to_geojson(self):
+        """省略 output.formats 时应默认只输出 GeoJSON。"""
+        payload = {"schema_version": "1.0", "request_id": "demo-1", "aoi": {"mode": "bbox", "bbox": [30.0, 120.0, 30.2, 120.2]}, "output": {"root": "data/output/buildings"}}
+        config = adapter.parse_request(payload)
+        self.assertEqual(config["formats"], ["geojson"])
+
+    def test_main_writes_geojson_when_formats_omitted(self):
+        """省略 output.formats 的命令行请求应返回 0 并写出 buildings.geojson。"""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            payload = {"schema_version": "1.0", "request_id": "default-1", "aoi": {"mode": "bbox", "bbox": [30.0, 120.0, 30.2, 120.2]}, "output": {"root": str(temporary / "out")}}
+            request_path = temporary / "request.json"
+            request_path.write_text(json.dumps(payload), encoding="utf-8")
+            result_path = temporary / "result.json"
+            with mock.patch.object(adapter.downloader, "fetch_and_convert", side_effect=fake_fetch_and_convert):
+                exit_code = adapter.main(["--request", str(request_path), "--result", str(result_path)])
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((temporary / "out" / "buildings.geojson").exists())
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+        self.assertEqual(result["status"], "success")
+
     def test_main_reports_exit_code_2_when_aoi_missing(self):
         """缺少 aoi 的请求应返回退出码 2，并写出失败结果。"""
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -94,7 +94,7 @@ def parse_request(payload: dict[str, Any]) -> dict[str, Any]:
     root = output.get("root")
     if not isinstance(root, str) or not root:
         raise ValueError("output.root 必须是非空字符串。")
-    formats = output.get("formats")
+    formats = output.get("formats", ["geojson"])
     if not isinstance(formats, list) or not formats:
         raise ValueError("output.formats 必须是非空列表。")
     for fmt in formats:
