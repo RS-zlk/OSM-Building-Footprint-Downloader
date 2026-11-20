@@ -4,6 +4,20 @@
 
 从 OpenStreetMap 的 Overpass API 下载指定范围内的建筑轮廓，并转换为标准 GeoJSON 或 Shapefile。支持当前或历史快照、SHP 研究区、自动坐标转换、分块下载和请求重试。
 
+## Fork 与上游
+
+- 本仓库：<https://github.com/eryieryiya/OSM-Building-Footprint-Downloader>，fork 自 <https://github.com/RS-zlk/OSM-Building-Footprint-Downloader>。
+- 当前二次开发版本：2.1.0（开发中）。
+- 开发分支为 `dev`；`main` 仅用于跟踪上游，不直接修改。
+- 上游代码只读参考，不直接在上游仓库提交改动。
+
+同步上游：
+
+```bash
+git fetch upstream
+git rebase upstream/main
+```
+
 ## 特性
 
 - 下载当前或指定 UTC 时刻的 OSM 建筑轮廓。
