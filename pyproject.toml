@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gui = ["customtkinter>=5.2"]
+gui = ["customtkinter>=5.2", "requests>=2.31", "Pillow>=10"]
 gpkg = ["fiona>=1.9"]
 dev = ["ruff>=0.6", "mypy>=1.10", "pyinstaller>=6.6"]
 
