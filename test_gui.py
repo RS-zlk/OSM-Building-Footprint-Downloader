@@ -41,6 +41,11 @@ class GuiCommandTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "南 < 北"):
             validate_download_inputs("bbox", ["31", "120", "30", "121"], "", "out.geojson", "0.05", "2")
 
+    def test_missing_output_directory_is_accepted(self):
+        validate_download_inputs("bbox", ["30", "120", "31", "121"], "", "missing_dir/out.geojson", "0.05", "2")
+        with self.assertRaises(ValueError):
+            validate_download_inputs("bbox", ["30", "120", "31", "121"], "", "", "0.05", "2")
+
     def test_invalid_advanced_options_are_rejected_before_starting_download(self):
         with self.assertRaisesRegex(ValueError, "不能小于 0"):
             validate_download_inputs("bbox", ["30", "120", "31", "121"], "", "out.geojson", "-0.05", "2")

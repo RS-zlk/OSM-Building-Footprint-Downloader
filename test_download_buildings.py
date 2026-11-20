@@ -57,9 +57,47 @@ class DownloadBuildingsTests(unittest.TestCase):
         self.assertAlmostEqual(area.bounds[2], 1.0, places=3)
         self.assertAlmostEqual(area.bounds[3], 1.0, places=3)
 
+    def test_invalid_way_ring_is_discarded_with_reason(self):
+        element = {"type": "way", "id": 1, "geometry": [{"lon": 0, "lat": 0}, {"lon": 1, "lat": 1}]}
+        data = app.convert_to_geojson([element], [0, 0, 1, 1], None, None)
+        self.assertEqual(data["features"], [])
+        self.assertEqual(data["metadata"]["diagnostics"]["invalid_geometry"], 1)
+
+    def test_incomplete_relation_is_discarded_with_reason(self):
+        relation = {"type": "relation", "id": 3, "members": [{"role": "outer", "geometry": [{"lon": 0, "lat": 0}]}, {"role": "outer", "geometry": [{"lon": 1, "lat": 1}]}]}
+        data = app.convert_to_geojson([relation], [0, 0, 1, 1], None, None)
+        self.assertEqual(data["features"], [])
+        self.assertEqual(data["metadata"]["diagnostics"]["incomplete_relation"], 1)
+
+    def test_relation_member_way_is_not_emitted_twice(self):
+        relation = {
+            "type": "relation",
+            "id": 10,
+            "members": [
+                {"type": "way", "ref": 5, "role": "outer", "geometry": [{"lon": 0, "lat": 0}, {"lon": 1, "lat": 0}]},
+                {"type": "way", "ref": 5, "role": "outer", "geometry": [{"lon": 1, "lat": 0}, {"lon": 1, "lat": 1}]},
+                {"type": "way", "ref": 5, "role": "outer", "geometry": [{"lon": 1, "lat": 1}, {"lon": 0, "lat": 1}]},
+                {"type": "way", "ref": 5, "role": "outer", "geometry": [{"lon": 0, "lat": 1}, {"lon": 0, "lat": 0}]},
+            ],
+        }
+        way = {"type": "way", "id": 5, "geometry": [{"lon": 0, "lat": 0}, {"lon": 1, "lat": 0}, {"lon": 1, "lat": 1}, {"lon": 0, "lat": 1}, {"lon": 0, "lat": 0}]}
+        data = app.convert_to_geojson([relation, way], [0, 0, 1, 1], None, None)
+        self.assertEqual([feature["properties"]["osm_type"] for feature in data["features"]], ["relation"])
+        self.assertEqual(data["metadata"]["diagnostics"]["duplicate_member_way"], 1)
+
+    def test_node_element_is_unsupported(self):
+        data = app.convert_to_geojson([{"type": "node", "id": 7}], [0, 0, 1, 1], None, None)
+        self.assertEqual(data["features"], [])
+        self.assertEqual(data["metadata"]["diagnostics"]["unsupported_element"], 1)
+
+    def test_diagnostics_metadata_contains_all_keys(self):
+        data = app.convert_to_geojson([], [0, 0, 1, 1], None, None)
+        self.assertEqual(tuple(data["metadata"]["diagnostics"]), app.DIAGNOSTIC_KEYS)
+
     def test_write_shapefile_preserves_features_and_sidecars(self):
+        diagnostics = {"invalid_geometry": 2, "incomplete_relation": 0, "non_polygon": 1, "duplicate_member_way": 0, "unsupported_element": 3, "filtered_elements": 0}
         data = {
-            "metadata": {"crs": "EPSG:4326"},
+            "metadata": {"crs": "EPSG:4326", "diagnostics": diagnostics},
             "features": [
                 {"type": "Feature", "properties": {"osm_id": 1, "building:levels": "2", "名称": "测试建筑"}, "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]}},
                 {"type": "Feature", "properties": {"osm_id": 2, "building:levels": "3"}, "geometry": {"type": "MultiPolygon", "coordinates": [[[[2, 0], [3, 0], [3, 1], [2, 1], [2, 0]]], [[[4, 0], [5, 0], [5, 1], [4, 1], [4, 0]]]]}},
@@ -69,12 +107,17 @@ class DownloadBuildingsTests(unittest.TestCase):
             path = Path(temporary_directory) / "buildings.shp"
             self.assertEqual(app.write_output(path, data), "Shapefile")
             reader = shapefile.Reader(str(path), encoding="utf-8")
-            self.assertEqual(len(reader), 2)
+            try:
+                self.assertEqual(len(reader), 2)
+            finally:
+                reader.close()
             self.assertTrue(path.with_suffix(".prj").exists())
             self.assertTrue(path.with_suffix(".cpg").exists())
             mapping = app.json.loads(path.with_suffix(".fields.json").read_text(encoding="utf-8"))
             self.assertIn("building:levels", mapping.values())
             self.assertIn("名称", mapping.values())
+            metadata = app.json.loads(path.with_suffix(".metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["diagnostics"], diagnostics)
 
 
 if __name__ == "__main__":

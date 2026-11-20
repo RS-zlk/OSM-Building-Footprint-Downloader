@@ -92,10 +92,8 @@ def validate_download_inputs(source_mode: str, bbox: Sequence[str] | str, shp_pa
         if path.suffix.lower() != ".shp":
             raise ValueError("研究区文件必须是 .shp 格式。")
 
-    destination = Path(output_path.strip())
-    destination_parent = destination.parent if destination.is_absolute() else PROJECT_DIR / destination.parent
-    if not output_path.strip() or not destination_parent.is_dir():
-        raise ValueError("请选择一个已存在文件夹内的输出位置。")
+    if not output_path.strip():
+        raise ValueError("请选择一个输出位置。")
     try:
         tile = float(tile_size)
         retry_count = int(retries)
@@ -414,6 +412,10 @@ class DownloaderApp(ctk.CTkFrame):
         except ValueError as error:
             messagebox.showerror("无法开始下载", str(error), parent=self.master)
             return
+        destination = Path(self.output_path.get().strip())
+        if not destination.is_absolute():
+            destination = PROJECT_DIR / destination
+        destination.parent.mkdir(parents=True, exist_ok=True)
         self.running = True
         self.cancel_requested = False
         self.download_button.configure(state="disabled")

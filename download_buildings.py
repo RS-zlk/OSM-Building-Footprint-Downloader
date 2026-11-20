@@ -33,6 +33,8 @@ DEFAULT_ENDPOINTS = (
     "https://overpass.kumi.systems/api/interpreter",
 )
 USER_AGENT = "osm-building-downloader/2.0 (local data export)"
+# 丢弃与过滤诊断项的固定顺序，保证 CLI 摘要与元数据输出稳定
+DIAGNOSTIC_KEYS = ("invalid_geometry", "incomplete_relation", "non_polygon", "duplicate_member_way", "unsupported_element", "filtered_elements")
 
 if _PROJ_DATA.is_dir():
     datadir.set_data_dir(str(_PROJ_DATA))
@@ -79,7 +81,10 @@ def load_study_area(path: Path, crs_override: str | None) -> Any:
         reader = shapefile.Reader(str(path))
     except (OSError, shapefile.ShapefileException) as error:
         raise ValueError(f"Could not read shapefile {path}: {error}") from error
-    geometries = [shape(record.shape.__geo_interface__) for record in reader.shapeRecords() if record.shape.shapeType != shapefile.NULL]
+    try:
+        geometries = [shape(record.shape.__geo_interface__) for record in reader.shapeRecords() if record.shape.shapeType != shapefile.NULL]
+    finally:
+        reader.close()
     if not geometries:
         raise ValueError(f"Shapefile {path} contains no geometries.")
     if not all(geometry.geom_type in {"Polygon", "MultiPolygon"} for geometry in geometries):
@@ -167,38 +172,65 @@ def relation_geometry(element: dict[str, Any]) -> Any | None:
     return geometry if not geometry.is_empty and geometry.is_valid else None
 
 
-def element_geometry(element: dict[str, Any]) -> Any | None:
+def element_geometry_with_reason(element: dict[str, Any]) -> tuple[Any | None, str | None]:
+    """返回要素几何及其失败原因；成功时原因为 None。"""
     if element.get("type") == "way":
-        return polygon_from_ring(element.get("geometry", []))
+        geometry = polygon_from_ring(element.get("geometry", []))
+        return (geometry, None) if geometry is not None else (None, "invalid_geometry")
     if element.get("type") == "relation":
-        return relation_geometry(element)
-    return None
+        geometry = relation_geometry(element)
+        return (geometry, None) if geometry is not None else (None, "incomplete_relation")
+    return None, "unsupported_element"
+
+
+def element_geometry(element: dict[str, Any]) -> Any | None:
+    """只返回要素几何，保留原有调用方式。"""
+    return element_geometry_with_reason(element)[0]
 
 
 def convert_to_geojson(source: Iterable[dict[str, Any]], bbox: list[float], snapshot_date: str | None, clip_geometry: Any | None) -> dict[str, Any]:
+    """把 Overpass 元素转换为 GeoJSON，并在元数据中记录丢弃诊断。"""
+    elements = list(source)
+    member_way_refs = {
+        member["ref"]
+        for element in elements
+        if element.get("type") == "relation"
+        for member in element.get("members", [])
+        if member.get("type") == "way" and isinstance(member.get("ref"), int)
+    }
+    diagnostics = {key: 0 for key in DIAGNOSTIC_KEYS}
     features = []
     seen: set[tuple[str, int]] = set()
-    for element in source:
+    for element in elements:
         osm_type, osm_id = element.get("type"), element.get("id")
-        key = (osm_type, osm_id)
-        if key in seen or osm_type not in {"way", "relation"} or not isinstance(osm_id, int):
+        if osm_type not in {"way", "relation"} or not isinstance(osm_id, int):
+            diagnostics["unsupported_element"] += 1
             continue
-        geometry = element_geometry(element)
+        key = (osm_type, osm_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        if osm_type == "way" and osm_id in member_way_refs:
+            diagnostics["duplicate_member_way"] += 1
+            continue
+        geometry, reason = element_geometry_with_reason(element)
         if geometry is None:
+            if reason is not None:
+                diagnostics[reason] += 1
             continue
         if clip_geometry is not None:
             geometry = geometry.intersection(clip_geometry)
             if geometry.is_empty:
                 continue
         if geometry.geom_type not in {"Polygon", "MultiPolygon"}:
+            diagnostics["non_polygon"] += 1
             continue
-        seen.add(key)
         properties = {"osm_type": osm_type, "osm_id": osm_id, **element.get("tags", {})}
         features.append({"type": "Feature", "properties": properties, "geometry": mapping(geometry)})
     note = "Contains OSM building ways and multipolygon relations."
     if clip_geometry is not None:
         note += " Features are clipped to the supplied study-area shapefile."
-    return {"type": "FeatureCollection", "metadata": {"source": "OpenStreetMap contributors, via Overpass API", "licence": "ODbL 1.0", "crs": "EPSG:4326 (WGS 84)", "query_bbox_wgs84_south_west_north_east": bbox, "requested_osm_snapshot_utc": snapshot_date, "downloaded_at_utc": datetime.now(timezone.utc).isoformat(), "note": note}, "features": features}
+    return {"type": "FeatureCollection", "metadata": {"source": "OpenStreetMap contributors, via Overpass API", "licence": "ODbL 1.0", "crs": "EPSG:4326 (WGS 84)", "query_bbox_wgs84_south_west_north_east": bbox, "requested_osm_snapshot_utc": snapshot_date, "downloaded_at_utc": datetime.now(timezone.utc).isoformat(), "note": note, "diagnostics": diagnostics}, "features": features}
 
 
 def shapefile_field_name(name: str, used: set[str]) -> str:
@@ -302,6 +334,9 @@ def main() -> int:
     except (OSError, ValueError, shapefile.ShapefileException) as error:
         print(f"Output failed: {error}", file=sys.stderr)
         return 1
+    diagnostics = geojson["metadata"]["diagnostics"]
+    if any(diagnostics.values()):
+        print("丢弃/过滤统计：" + ", ".join(f"{key}={value}" for key, value in diagnostics.items() if value))
     print(f"Saved {len(geojson['features'])} building footprints as {output_format} from {len(tiles)} tile(s) to {args.output}")
     return 0
 
