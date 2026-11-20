@@ -117,7 +117,7 @@ def downloader_command_prefix() -> list[str]:
     return [sys.executable, str(DOWNLOADER)]
 
 
-def build_command(source_mode: str, bbox: Sequence[str] | str, shp_path: str, output_path: str, snapshot_date: str, tile_size: str, retries: str, building_values: str = "") -> list[str]:
+def build_command(source_mode: str, bbox: Sequence[str] | str, shp_path: str, output_path: str, snapshot_date: str, tile_size: str, retries: str, building_values: str = "", endpoints: str = "") -> list[str]:
     """Build a safe subprocess command from validated GUI field values."""
     command = downloader_command_prefix()
     if source_mode == "shp":
@@ -140,6 +140,10 @@ def build_command(source_mode: str, bbox: Sequence[str] | str, shp_path: str, ou
         command.extend(["--retries", retries.strip()])
     if building_values.strip():
         command.extend(["--building-values", building_values.strip()])
+    for endpoint in endpoints.split(","):
+        value = endpoint.strip()
+        if value:
+            command.extend(["--endpoint", value])
     return command
 
 
@@ -160,6 +164,7 @@ class DownloaderApp(ctk.CTkFrame):
         self.tile_size = tk.StringVar(value="0.05")
         self.retries = tk.StringVar(value="2")
         self.building_values = tk.StringVar()
+        self.endpoints = tk.StringVar()
         self.events: queue.Queue[tuple[str, str | int]] = queue.Queue()
         self.running = False
         self.cancel_requested = False
@@ -274,6 +279,7 @@ class DownloaderApp(ctk.CTkFrame):
         self.tile_meter_label.pack(anchor="w", padx=18, pady=(0, 10))
         self._labeled_entry(panel, "每端点重试次数", self.retries, "默认 2")
         self._labeled_entry(panel, "建筑类型（逗号分隔）", self.building_values, "留空表示全部")
+        self._labeled_entry(panel, "Overpass 端点（逗号分隔）", self.endpoints, "留空使用默认端点")
         self.download_button = ctk.CTkButton(panel, text="开始下载", height=42, fg_color=BLACK, hover_color="#333333", text_color=WHITE, font=ctk.CTkFont(size=14, weight="bold"), command=self._start_download)
         self.download_button.pack(fill="x", padx=18, pady=(22, 8))
         self.cancel_button = ctk.CTkButton(panel, text="取消下载", height=34, fg_color=WHITE, border_width=1, border_color=BLACK, text_color=BLACK, hover_color="#EDEDED", state="disabled", command=self._cancel_download)
@@ -424,7 +430,7 @@ class DownloaderApp(ctk.CTkFrame):
             return
         try:
             validate_download_inputs(self.source_mode.get(), [self.coordinates[name].get() for name in ("南", "西", "北", "东")], self.shp_path.get(), self.output_path.get(), self.tile_size.get(), self.retries.get())
-            command = build_command(self.source_mode.get(), [self.coordinates[name].get() for name in ("南", "西", "北", "东")], self.shp_path.get(), self.output_path.get(), self._snapshot_value(), self.tile_size.get(), self.retries.get(), self.building_values.get())
+            command = build_command(self.source_mode.get(), [self.coordinates[name].get() for name in ("南", "西", "北", "东")], self.shp_path.get(), self.output_path.get(), self._snapshot_value(), self.tile_size.get(), self.retries.get(), self.building_values.get(), self.endpoints.get())
         except ValueError as error:
             messagebox.showerror("无法开始下载", str(error), parent=self.master)
             return

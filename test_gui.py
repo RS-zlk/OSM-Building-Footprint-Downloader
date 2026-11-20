@@ -41,6 +41,20 @@ class GuiCommandTests(unittest.TestCase):
         self.assertIn("--building-values", command)
         self.assertEqual(command[command.index("--building-values") + 1], "yes,house")
 
+    def test_endpoints_are_passed_to_command_in_order(self):
+        """逗号分隔的端点应按顺序展开为多组 --endpoint 参数。"""
+        command = build_command("bbox", ["30.0", "120.0", "31.0", "121.0"], "", "out.geojson", "", "0.05", "2", endpoints="https://a/api/interpreter, https://b/api/interpreter")
+        positions = [index for index, value in enumerate(command) if value == "--endpoint"]
+        self.assertEqual(len(positions), 2)
+        self.assertEqual(command[positions[0] + 1], "https://a/api/interpreter")
+        self.assertEqual(command[positions[1] + 1], "https://b/api/interpreter")
+        self.assertLess(positions[0], positions[1])
+
+    def test_empty_endpoints_are_omitted_from_command(self):
+        """端点留空时不应生成任何 --endpoint 参数。"""
+        command = build_command("bbox", ["30.0", "120.0", "31.0", "121.0"], "", "out.geojson", "", "0.05", "2", endpoints="")
+        self.assertNotIn("--endpoint", command)
+
     def test_tile_size_is_converted_to_metres_at_selected_latitude(self):
         north_south, east_west = tile_size_to_meters("0.05", 30.75)
         self.assertAlmostEqual(north_south, 5543, delta=20)
