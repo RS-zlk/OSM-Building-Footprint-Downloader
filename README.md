@@ -48,6 +48,18 @@ pip install -e ".[gui,gpkg]"
 
 其中 `gui` 额外安装桌面界面依赖 `customtkinter`，`gpkg` 额外安装 GeoPackage 输出依赖 `fiona`；如需开发工具（ruff、mypy、PyInstaller），使用 `pip install -e ".[gui,gpkg,dev]"`。
 
+### 可选：配置影像底图
+
+建筑下载可独立运行。底图功能需要单独获取 [TiffGetter](https://github.com/eryieryiya/TiffGetter)，并在本项目的 Python 环境中安装其影像依赖。以下为源码运行示例：
+
+```bash
+git clone https://github.com/eryieryiya/TiffGetter.git ../TiffGetter
+python -m pip install numpy rasterio psutil
+python gui.py
+```
+
+默认查找与本项目同级的 `TiffGetter` 文件夹；其他位置可通过 `TIFFGETTER_HOME` 指定。测试过的 TiffGetter 版本为 `c22e207`，该项目更新后应重新验证兼容性。Windows 打包时需先在构建环境配置 TiffGetter 和依赖；未包含 TiffGetter 时建筑功能可用，底图功能不可用。不同项目的依赖版本有差异，不要直接将 TiffGetter 的整个锁定依赖文件覆盖安装到本项目环境。
+
 安装后会提供两个命令行入口，分别对应命令行下载与桌面界面：
 
 ```bash
@@ -132,6 +144,7 @@ python download_buildings.py \
 ```
 
 使用 `--refresh-cache` 可忽略已有缓存并重新请求所有分块。
+最新数据的缓存最长保留 24 小时；历史快照缓存不自动过期，如需重新查询请使用 `--refresh-cache`。
 
 ### 并行分块
 

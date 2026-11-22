@@ -7,6 +7,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import http.client
+import importlib.util
 import json
 import math
 import os
@@ -33,6 +34,13 @@ from shapely.geometry import LineString, MultiPolygon, Polygon, mapping, shape  
 from shapely.ops import polygonize, transform, unary_union  # noqa: E402
 
 try:
+    # Prefer Fiona's bundled database for pip wheels over inherited system paths.
+    fiona_spec = importlib.util.find_spec("fiona")
+    if not _PROJ_DATA.is_dir() and fiona_spec and fiona_spec.origin:
+        fiona_proj_data = Path(fiona_spec.origin).parent / "proj_data"
+        if (fiona_proj_data / "proj.db").is_file():
+            os.environ["PROJ_DATA"] = str(fiona_proj_data)
+            os.environ["PROJ_LIB"] = str(fiona_proj_data)
     import fiona
 except ImportError:
     fiona = None  # type: ignore[assignment]
@@ -44,6 +52,7 @@ DEFAULT_ENDPOINTS = (
 USER_AGENT = "osm-building-downloader/2.1 (local data export)"
 # 丢弃与过滤诊断项的固定顺序，保证 CLI 摘要与元数据输出稳定
 DIAGNOSTIC_KEYS = ("invalid_geometry", "incomplete_relation", "non_polygon", "duplicate_member_way", "unsupported_element", "filtered_elements")
+CURRENT_CACHE_MAX_AGE = 24 * 60 * 60
 
 if _PROJ_DATA.is_dir():
     datadir.set_data_dir(str(_PROJ_DATA))
@@ -209,10 +218,12 @@ def cache_key(bbox: list[float], snapshot_date: str | None) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def read_cached_response(cache_dir: Path, key: str) -> dict[str, Any] | None:
+def read_cached_response(cache_dir: Path, key: str, max_age: float | None = None) -> dict[str, Any] | None:
     """读取分块缓存响应，文件不存在时返回 None。"""
     path = cache_dir / f"{key}.json"
     if not path.exists():
+        return None
+    if max_age is not None and time.time() - path.stat().st_mtime >= max_age:
         return None
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -237,7 +248,7 @@ def collect_tile_responses(endpoints: Iterable[str], tiles: list[list[float]], t
         if cache_dir is not None:
             key = cache_key(tile, snapshot_date)
             if not refresh_cache:
-                cached = read_cached_response(cache_dir, key)
+                cached = read_cached_response(cache_dir, key, CURRENT_CACHE_MAX_AGE if snapshot_date is None else None)
                 if cached is not None:
                     return cached
         response = query_tile(endpoints, tile, timeout, retries, snapshot_date, deadline)
@@ -308,14 +319,19 @@ def element_geometry(element: dict[str, Any]) -> Any | None:
 def convert_to_geojson(source: Iterable[dict[str, Any]], bbox: list[float], snapshot_date: str | None, clip_geometry: Any | None, building_values: set[str] | None = None) -> dict[str, Any]:
     """把 Overpass 元素转换为 GeoJSON，并在元数据中记录丢弃诊断。"""
     elements = list(source)
-    # 只从能生成有效几何的 relation 收集成员 way，避免残缺 relation 导致独立 way 被误判为重复
-    member_way_refs = {
-        member["ref"]
-        for element in elements
-        if element.get("type") == "relation" and relation_geometry(element) is not None
-        for member in element.get("members", [])
-        if member.get("type") == "way" and isinstance(member.get("ref"), int)
-    }
+    # 只对实际保留的 relation 去重，避免筛选或裁剪导致成员建筑丢失。
+    member_way_refs: set[int] = set()
+    for element in elements:
+        if element.get("type") != "relation" or (building_values and element.get("tags", {}).get("building") not in building_values):
+            continue
+        geometry = relation_geometry(element)
+        if geometry is None:
+            continue
+        if clip_geometry is not None:
+            geometry = geometry.intersection(clip_geometry)
+        if geometry.is_empty or geometry.geom_type not in {"Polygon", "MultiPolygon"}:
+            continue
+        member_way_refs.update(member["ref"] for member in element.get("members", []) if member.get("type") == "way" and isinstance(member.get("ref"), int))
     diagnostics = {key: 0 for key in DIAGNOSTIC_KEYS}
     features = []
     seen: set[tuple[str, int]] = set()
@@ -440,13 +456,16 @@ def write_geopackage(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     features = data["features"]
     schema = geopackage_schema(features)
-    with fiona.open(path, "w", driver="GPKG", schema=schema, crs="EPSG:4326", layer="buildings") as sink:
-        for feature in features:
-            geometry = shape(feature["geometry"])
-            if geometry.geom_type == "Polygon":
-                geometry = MultiPolygon([geometry])
-            properties = {name: feature["properties"].get(name) for name in schema["properties"]}
-            sink.write({"geometry": mapping(geometry), "properties": properties})
+    try:
+        with fiona.open(path, "w", driver="GPKG", schema=schema, crs="EPSG:4326", layer="buildings") as sink:
+            for feature in features:
+                geometry = shape(feature["geometry"])
+                if geometry.geom_type == "Polygon":
+                    geometry = MultiPolygon([geometry])
+                properties = {name: feature["properties"].get(name) for name in schema["properties"]}
+                sink.write({"geometry": mapping(geometry), "properties": properties})
+    except fiona.errors.CRSError as error:
+        raise ValueError("GeoPackage CRS error; check PROJ_DATA/PROJ_LIB for a conflicting PROJ installation: " + str(error)) from error
     path.with_suffix(".metadata.json").write_text(json.dumps(data["metadata"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 

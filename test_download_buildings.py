@@ -1,4 +1,5 @@
 import http.client
+import os
 import tempfile
 import time
 import unittest
@@ -14,6 +15,30 @@ import download_buildings as app
 
 
 class DownloadBuildingsTests(unittest.TestCase):
+    def test_filtered_relation_does_not_hide_matching_member(self):
+        ring = [{"lon": 0, "lat": 0}, {"lon": 1, "lat": 0}, {"lon": 1, "lat": 1}, {"lon": 0, "lat": 1}, {"lon": 0, "lat": 0}]
+        way = {"type": "way", "id": 1, "tags": {"building": "house"}, "geometry": ring}
+        relation = {"type": "relation", "id": 2, "tags": {"building": "apartments"}, "members": [{"type": "way", "ref": 1, "role": "outer", "geometry": ring}]}
+        result = app.convert_to_geojson([way, relation], [0, 0, 1, 1], None, None, {"house"})
+        self.assertEqual([feature["properties"]["osm_id"] for feature in result["features"]], [1])
+
+    def test_current_cache_expires_but_historical_cache_remains(self):
+        tile = [0, 0, 1, 1]
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            date = "2024-01-01T00:00:00Z"
+            for snapshot in (None, date):
+                key = app.cache_key(tile, snapshot)
+                app.write_cached_response(cache, key, {"elements": [{"old": True}]})
+                old = time.time() - app.CURRENT_CACHE_MAX_AGE - 1
+                os.utime(cache / f"{key}.json", (old, old))
+            with mock.patch.object(app, "query_tile", return_value={"elements": [{"new": True}]}) as query:
+                current = app.collect_tile_responses(["endpoint"], [tile], 10, 0, None, None, 1, cache, False, False)
+                historical = app.collect_tile_responses(["endpoint"], [tile], 10, 0, date, None, 1, cache, False, False)
+            self.assertEqual(current[0]["elements"][0], {"new": True})
+            self.assertEqual(historical[0]["elements"][0], {"old": True})
+            self.assertEqual(query.call_count, 1)
+
     def test_split_bbox_and_limit(self):
         self.assertEqual(len(app.split_bbox([0, 0, 0.11, 0.11], 0.05, 9)), 9)
         with self.assertRaisesRegex(ValueError, "exceeding"):

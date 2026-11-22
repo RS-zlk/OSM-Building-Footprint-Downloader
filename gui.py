@@ -608,8 +608,12 @@ class DownloaderApp(ctk.CTkFrame):
 
     def _build_basemap_page(self) -> None:
         """构建底图页：左侧下载参数，右侧覆盖信息。"""
-        _fetcher, infos = load_tiffgetter()
-        self._basemap_infos = {info.name: info for info in infos}
+        self._basemap_error: str | None = None
+        try:
+            _fetcher, infos = load_tiffgetter()
+            self._basemap_infos = {info.name: info for info in infos}
+        except ImportError as error:
+            self._basemap_error = str(error)
         page = self._pages["basemap"]
         page.columnconfigure(0, weight=3)
         page.columnconfigure(1, weight=2, minsize=440)
@@ -622,6 +626,8 @@ class DownloaderApp(ctk.CTkFrame):
         right.columnconfigure(0, weight=1)
         self._build_basemap_form(left)
         self._build_basemap_info(right)
+        if self._basemap_error:
+            self.basemap_status.configure(text="底图未配置：请参阅 README 安装 TiffGetter", text_color=ERROR)
 
     def _build_basemap_form(self, parent: ctk.CTkFrame) -> None:
         """构建底图下载参数卡片。"""
@@ -754,6 +760,9 @@ class DownloaderApp(ctk.CTkFrame):
     def _start_basemap_download(self) -> None:
         """校验底图参数并在后台线程中调用 TiffGetter。"""
         if self.running:
+            return
+        if self._basemap_error:
+            messagebox.showerror("底图未配置", f"请安装 TiffGetter 及其依赖，详见 README。\n{self._basemap_error}", parent=self.master)
             return
         bbox = self._basemap_bbox()
         if bbox is None:
