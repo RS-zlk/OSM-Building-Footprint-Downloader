@@ -16,6 +16,18 @@ conda activate osm-buildings
 python -m unittest -v
 ```
 
+## 分支与上游同步
+
+- `origin` 是二次开发者的 fork（<https://github.com/eryieryiya/OSM-Building-Footprint-Downloader>），`upstream` 是上游仓库（<https://github.com/RS-zlk/OSM-Building-Footprint-Downloader>）。
+- 开发在 `dev` 分支进行，每个改动保持聚焦；`main` 仅用于跟踪上游。
+- 同步上游：
+
+```bash
+git fetch upstream && git rebase upstream/main
+```
+
+- fork 的 Issues 用于记录二次开发过程中的问题：<https://github.com/eryieryiya/OSM-Building-Footprint-Downloader/issues>。
+
 ## 提交拉取请求
 
 - 每个 PR 聚焦一个明确的改动。
